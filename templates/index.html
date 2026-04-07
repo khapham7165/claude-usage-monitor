@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Usage Monitor</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <header>
+        <div class="header-left">
+            <div>
+                <h1>Claude Usage Monitor</h1>
+                <span class="subtitle">Real-time usage analytics</span>
+            </div>
+        </div>
+        <div class="header-right">
+            <select id="sourceFilter" class="source-select">
+                <option value="">All Sources</option>
+                <option value="local">Local</option>
+            </select>
+            <div class="range-selector">
+                <button class="range-btn active" data-days="7">7d</button>
+                <button class="range-btn" data-days="30">30d</button>
+                <button class="range-btn" data-days="90">90d</button>
+                <button class="range-btn" data-days="0">All</button>
+            </div>
+            <label class="refresh-toggle">
+                <input type="checkbox" id="autoRefresh" checked>
+                <span>Auto-refresh</span>
+            </label>
+            <span id="lastUpdated" class="last-updated"></span>
+        </div>
+    </header>
+
+    <!-- Sync indicator bar -->
+    <div id="syncBar" class="sync-bar hidden">
+        <div class="sync-bar-inner">
+            <div class="sync-spinner"></div>
+            <span id="syncBarText">Syncing...</span>
+        </div>
+    </div>
+
+    <div class="app-layout">
+        <!-- MAIN CONTENT -->
+        <main id="mainContent">
+            <!-- Tab bar -->
+            <div class="tab-bar">
+                <button class="tab-btn active" data-tab="analytics">Analytics</button>
+                <button class="tab-btn" data-tab="sessions">Sessions</button>
+                <button class="tab-btn" data-tab="usage">Account Usage</button>
+                <button class="tab-btn" data-tab="settings">Settings</button>
+            </div>
+
+            <!-- TAB: Analytics -->
+            <div id="tabAnalytics" class="tab-content">
+                <div class="cards-row">
+                    <div class="card summary-card">
+                        <div class="card-label">Total Sessions</div>
+                        <div class="card-value" id="totalSessions">--</div>
+                    </div>
+                    <div class="card summary-card">
+                        <div class="card-label">Total Messages</div>
+                        <div class="card-value" id="totalMessages">--</div>
+                    </div>
+                    <div class="card summary-card">
+                        <div class="card-label">Active Sessions</div>
+                        <div class="card-value">
+                            <span id="activeDot" class="active-dot hidden"></span>
+                            <span id="activeSessions">--</span>
+                        </div>
+                    </div>
+                    <div class="card summary-card">
+                        <div class="card-label">Est. API Cost</div>
+                        <div class="card-value" id="estimatedCost">--</div>
+                        <div class="card-sub">API-equivalent</div>
+                    </div>
+                </div>
+
+                <div class="cards-row">
+                    <div class="card summary-card small">
+                        <div class="card-label">Today</div>
+                        <div class="card-value" id="todayMessages">--</div>
+                        <div class="card-sub">messages</div>
+                    </div>
+                    <div class="card summary-card small">
+                        <div class="card-label">Yesterday</div>
+                        <div class="card-value" id="yesterdayMessages">--</div>
+                        <div class="card-sub">messages</div>
+                    </div>
+                    <div class="card summary-card small">
+                        <div class="card-label">Date Range</div>
+                        <div class="card-value" id="dateRange" style="font-size: 1rem;">--</div>
+                    </div>
+                    <div class="card summary-card small">
+                        <div class="card-label">Streak</div>
+                        <div class="card-value" id="streak">--</div>
+                        <div class="card-sub">consecutive days</div>
+                    </div>
+                </div>
+
+                <div class="card full-width">
+                    <h2>Activity Over Time</h2>
+                    <canvas id="activityChart"></canvas>
+                </div>
+
+                <div class="two-col">
+                    <div class="card"><h2>Projects</h2><canvas id="projectChart"></canvas></div>
+                    <div class="card"><h2>Activity Calendar</h2><div id="heatmapContainer" class="heatmap-container"></div></div>
+                </div>
+
+                <div class="two-col">
+                    <div class="card"><h2>Model Usage</h2><canvas id="modelChart"></canvas><div id="modelTable" class="model-table"></div></div>
+                    <div class="card"><h2>Token Cost Trend</h2><canvas id="costChart"></canvas></div>
+                </div>
+            </div>
+
+            <!-- TAB: Sessions -->
+            <div id="tabSessions" class="tab-content hidden">
+                <div id="activeSessionsCard" class="card full-width hidden">
+                    <h2>Active Sessions <span class="badge" id="activeCount">0</span></h2>
+                    <div class="table-container">
+                        <table id="activeSessionsTable">
+                            <thead><tr><th>PID</th><th>Project</th><th>Source</th><th>Started</th><th>Uptime</th><th>Type</th><th>Action</th></tr></thead>
+                            <tbody id="activeSessionsBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card full-width">
+                    <h2>Session History</h2>
+                    <div class="table-container">
+                        <table id="sessionsTable">
+                            <thead><tr><th>Session ID</th><th>Project</th><th>Source</th><th>Start Time</th><th>Duration</th><th>Messages</th><th>Status</th></tr></thead>
+                            <tbody id="sessionsBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: Account Usage -->
+            <div id="tabUsage" class="tab-content hidden">
+                <div class="usage-tab-header">
+                    <h2>Account Usage</h2>
+                    <button class="btn btn-sm btn-ghost" id="refreshUsageBtn">Refresh</button>
+                </div>
+                <div id="usageAccountsList"></div>
+            </div>
+
+            <!-- TAB: Settings -->
+            <div id="tabSettings" class="tab-content hidden" style="max-width: 700px;">
+                <div class="setting-group">
+                    <label>Claude.ai Accounts</label>
+                    <p class="setting-desc">Get sessionKey from: claude.ai &rarr; DevTools (F12) &rarr; Application &rarr; Cookies.</p>
+                    <div id="accountsList"></div>
+                    <div class="add-form" style="margin-top: 12px;">
+                        <input type="text" id="newAccountName" placeholder="Account name (optional)" class="text-input" style="margin-bottom: 6px;">
+                        <div class="key-input-row">
+                            <input type="password" id="newAccountKey" placeholder="sk-ant-sid02-..." class="text-input">
+                            <button class="btn btn-primary" id="addAccountBtn">Add</button>
+                        </div>
+                        <div id="addAccountStatus" class="key-status"></div>
+                    </div>
+                </div>
+
+                <hr style="border-color: var(--border); margin: 20px 0;">
+
+                <div class="setting-group">
+                    <label>Remote Servers (SSH)</label>
+                    <p class="setting-desc">Fetch usage data from remote machines via SSH.</p>
+                    <div id="serversList"></div>
+                    <div class="add-form" style="margin-top: 12px;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px;">
+                            <input type="text" id="newServerName" placeholder="Name (e.g. Dev Box)" class="text-input">
+                            <input type="text" id="newServerHost" placeholder="Host (e.g. 10.0.0.1)" class="text-input">
+                        </div>
+                        <div class="key-input-row">
+                            <input type="text" id="newServerUser" placeholder="User (ubuntu)" class="text-input" style="max-width: 120px;">
+                            <input type="text" id="newServerKey" placeholder="Key (~/.ssh/id_rsa)" class="text-input">
+                            <button class="btn btn-primary" id="addServerBtn">Add</button>
+                        </div>
+                        <div id="addServerStatus" class="key-status"></div>
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <footer>
+        <span>Data source: ~/.claude/</span>
+        <span id="recordCount"></span>
+    </footer>
+
+    <script src="/static/js/utils.js"></script>
+    <script src="/static/js/charts.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

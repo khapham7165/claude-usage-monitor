@@ -1,6 +1,10 @@
 """Claude.ai web API integration — multi-account support."""
+import os
+import certifi
 import cloudscraper
 from backend.auth import _load_config, _save_config, generate_id
+
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 
 
 def _get_scraper(session_key):

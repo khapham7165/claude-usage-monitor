@@ -147,72 +147,86 @@ def parse_plans():
     return plans
 
 
+def _extract_annotations_from_lines(lines, session_id, source="local"):
+    """Extract ExitPlanMode and Task* tool calls from a session's .jsonl lines.
+    Works on any iterable of string lines (local file handle or SSH list).
+    Returns (session_plan_entries, tasks_dict) for a single session file.
+    """
+    session_plans = []
+    tasks = {}       # str(counter) -> task dict
+    task_counter = 0
+
+    for line in lines:
+        line = line.strip() if isinstance(line, str) else line
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if record.get("type") != "assistant":
+            continue
+        content = record.get("message", {}).get("content", [])
+        if not isinstance(content, list):
+            continue
+        ts = record.get("timestamp", "")
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            name = block.get("name", "")
+            inp = block.get("input", {})
+            if name == "ExitPlanMode":
+                plan_path = inp.get("planFilePath", "")
+                slug = Path(plan_path).stem if plan_path else ""
+                session_plans.append({
+                    "sessionId": session_id,
+                    "slug": slug,
+                    "timestamp": ts,
+                    "planFilePath": plan_path,
+                    "allowedPrompts": inp.get("allowedPrompts", []),
+                    "_source": source,
+                })
+            elif name == "TaskCreate":
+                task_counter += 1
+                task_id = str(task_counter)
+                tasks[task_id] = {
+                    "id": task_id,
+                    "subject": inp.get("subject", ""),
+                    "description": inp.get("description", ""),
+                    "status": "pending",
+                    "createdAt": ts,
+                }
+            elif name == "TaskUpdate":
+                task_id = str(inp.get("taskId", ""))
+                if task_id in tasks:
+                    if "status" in inp:
+                        tasks[task_id]["status"] = inp["status"]
+                    if "subject" in inp:
+                        tasks[task_id]["subject"] = inp["subject"]
+
+    return session_plans, tasks
+
+
 def scan_session_annotations():
-    """Single-pass scan of all session .jsonl files.
+    """Single-pass scan of all local session .jsonl files.
     Returns (session_plans, session_tasks) where:
-      session_plans: list of {sessionId, slug, timestamp, planFilePath, allowedPrompts}
+      session_plans: list of {sessionId, slug, timestamp, planFilePath, allowedPrompts, _source}
       session_tasks: dict of {sessionId: [task, ...]} with final task states
     """
     session_plans = []
-    session_tasks = {}  # {sessionId: {task_num_str: task_dict}}
+    session_tasks = {}
 
     for project_dir in _list_project_dirs():
         for jsonl_file in project_dir.glob("*.jsonl"):
             session_id = jsonl_file.stem
-            tasks = {}       # str(counter) -> task dict
-            task_counter = 0
             try:
                 with open(jsonl_file, "r") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            record = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if record.get("type") != "assistant":
-                            continue
-                        content = record.get("message", {}).get("content", [])
-                        if not isinstance(content, list):
-                            continue
-                        ts = record.get("timestamp", "")
-                        for block in content:
-                            if not isinstance(block, dict):
-                                continue
-                            name = block.get("name", "")
-                            inp = block.get("input", {})
-                            if name == "ExitPlanMode":
-                                plan_path = inp.get("planFilePath", "")
-                                slug = Path(plan_path).stem if plan_path else ""
-                                session_plans.append({
-                                    "sessionId": session_id,
-                                    "slug": slug,
-                                    "timestamp": ts,
-                                    "planFilePath": plan_path,
-                                    "allowedPrompts": inp.get("allowedPrompts", []),
-                                })
-                            elif name == "TaskCreate":
-                                task_counter += 1
-                                task_id = str(task_counter)
-                                tasks[task_id] = {
-                                    "id": task_id,
-                                    "subject": inp.get("subject", ""),
-                                    "description": inp.get("description", ""),
-                                    "status": "pending",
-                                    "createdAt": ts,
-                                }
-                            elif name == "TaskUpdate":
-                                task_id = str(inp.get("taskId", ""))
-                                if task_id in tasks:
-                                    if "status" in inp:
-                                        tasks[task_id]["status"] = inp["status"]
-                                    if "subject" in inp:
-                                        tasks[task_id]["subject"] = inp["subject"]
+                    sp_entries, tasks = _extract_annotations_from_lines(f, session_id, source="local")
+                session_plans.extend(sp_entries)
+                if tasks:
+                    session_tasks[session_id] = list(tasks.values())
             except Exception:
                 continue
-            if tasks:
-                session_tasks[session_id] = list(tasks.values())
 
     return session_plans, session_tasks
 

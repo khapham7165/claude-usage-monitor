@@ -3,7 +3,10 @@ import os
 import json
 from datetime import datetime, timezone
 import paramiko
-from backend.parsers import _parse_history_lines, _parse_token_log_lines, _decode_project_path
+from backend.parsers import (
+    _parse_history_lines, _parse_token_log_lines, _decode_project_path,
+    _extract_annotations_from_lines,
+)
 from backend.auth import _load_config, _save_config, generate_id
 
 
@@ -130,16 +133,28 @@ def sync_server(server_config, progress_cb=None):
 
         # Read all files in batches using a single tar stream to avoid too-many-open-files
         token_logs = []
+        session_plans = []
+        session_tasks = {}
         if jsonl_files:
-            token_logs = _read_project_files_batched(client, jsonl_files, claude_dir, source, _progress)
+            token_logs, session_plans, session_tasks = _read_project_files_batched(
+                client, jsonl_files, claude_dir, source, _progress
+            )
 
-        _progress("done", f"{len(history)} msgs, {len(token_logs)} token logs")
+        # Read remote plan files
+        _progress("reading_plans", "Reading plan files")
+        plans = _read_remote_plans(client, claude_dir, source)
+        _progress("reading_plans_done", f"{len(plans)} plans")
+
+        _progress("done", f"{len(history)} msgs, {len(token_logs)} token logs, {len(plans)} plans")
 
         return {
             "success": True,
             "server_id": server_id,
             "history": history,
             "token_logs": token_logs,
+            "session_plans": session_plans,
+            "session_tasks": session_tasks,
+            "plans": plans,
             "synced_at": datetime.now(timezone.utc).isoformat(),
             "history_count": len(history),
             "token_log_count": len(token_logs),
@@ -152,8 +167,12 @@ def sync_server(server_config, progress_cb=None):
 
 
 def _read_project_files_batched(client, jsonl_files, claude_dir, source, progress_cb):
-    """Read project .jsonl files in batches via exec_command to avoid fd exhaustion."""
+    """Read project .jsonl files in batches via exec_command to avoid fd exhaustion.
+    Returns (token_logs, session_plans, session_tasks).
+    """
     token_logs = []
+    session_plans = []
+    session_tasks = {}
     projects_prefix = f"{claude_dir}/projects/"
     total = len(jsonl_files)
     batch_size = 50  # files per batch
@@ -163,46 +182,41 @@ def _read_project_files_batched(client, jsonl_files, claude_dir, source, progres
         batch_end = min(batch_start + batch_size, total)
         progress_cb("reading_projects", f"Reading files {batch_start + 1}-{batch_end} of {total}")
 
-        # Use a delimiter-separated concat of all files in the batch
-        # Each file output is wrapped with markers so we can split
         parts = []
         for fpath in batch:
-            # Echo a JSON header line, then the file content
             safe_path = fpath.replace("'", "'\\''")
             parts.append(f"echo '<<<FILE:{fpath}>>>'; cat '{safe_path}' 2>/dev/null; echo '<<<END>>>'")
         cmd = "; ".join(parts)
 
         raw = _exec(client, cmd)
 
-        # Parse the concatenated output
         current_file = None
         current_lines = []
         for line in raw.splitlines():
             if line.startswith("<<<FILE:") and line.endswith(">>>"):
-                # Flush previous file
                 if current_file and current_lines:
-                    _process_file(current_file, current_lines, projects_prefix, source, token_logs)
-                current_file = line[8:-3]  # extract path
+                    _process_file(current_file, current_lines, projects_prefix, source,
+                                  token_logs, session_plans, session_tasks)
+                current_file = line[8:-3]
                 current_lines = []
             elif line == "<<<END>>>":
                 if current_file and current_lines:
-                    _process_file(current_file, current_lines, projects_prefix, source, token_logs)
+                    _process_file(current_file, current_lines, projects_prefix, source,
+                                  token_logs, session_plans, session_tasks)
                 current_file = None
                 current_lines = []
             elif current_file:
                 current_lines.append(line)
 
-        # Flush last file
         if current_file and current_lines:
-            _process_file(current_file, current_lines, projects_prefix, source, token_logs)
+            _process_file(current_file, current_lines, projects_prefix, source,
+                          token_logs, session_plans, session_tasks)
 
-    return token_logs
+    return token_logs, session_plans, session_tasks
 
 
-def _process_file(file_path, lines, projects_prefix, source, token_logs):
-    """Parse a single project session file's lines into token logs."""
-    # Extract project name and session id from path
-    # Path: /home/user/.claude/projects/project-name/session-id.jsonl
+def _process_file(file_path, lines, projects_prefix, source, token_logs, session_plans, session_tasks):
+    """Parse a single project session file's lines into token logs and annotations."""
     rel = file_path
     if projects_prefix in file_path:
         rel = file_path.split(projects_prefix, 1)[1]
@@ -213,3 +227,84 @@ def _process_file(file_path, lines, projects_prefix, source, token_logs):
         session_id = parts[-1].replace(".jsonl", "")
         project_path = _decode_project_path(proj_name)
         token_logs.extend(_parse_token_log_lines(lines, project_path, session_id, source=source))
+        sp_entries, tasks = _extract_annotations_from_lines(lines, session_id, source=source)
+        session_plans.extend(sp_entries)
+        if tasks:
+            session_tasks[session_id] = list(tasks.values())
+
+
+def _read_remote_plans(client, claude_dir, source):
+    """Read remote ~/.claude/plans/*.md files and return plan metadata list."""
+    # List plan files
+    raw = _exec(client, f"find {claude_dir}/plans -name '*.md' -type f 2>/dev/null")
+    plan_files = [f.strip() for f in raw.splitlines() if f.strip().endswith(".md")]
+    if not plan_files:
+        return []
+
+    # Read each plan with mtime and content using markers
+    parts = []
+    for fpath in plan_files:
+        safe_path = fpath.replace("'", "'\\''")
+        # Try Linux stat first, fall back to macOS stat
+        parts.append(
+            f"echo '<<<PLAN:{fpath}>>>';"
+            f"(stat -c '%Y' '{safe_path}' 2>/dev/null || stat -f '%m' '{safe_path}' 2>/dev/null || echo 0);"
+            f"cat '{safe_path}' 2>/dev/null;"
+            f"echo '<<<END>>>'"
+        )
+    cmd = "; ".join(parts)
+    raw = _exec(client, cmd)
+
+    plans = []
+    current_file = None
+    current_mtime = None
+    current_lines = []
+
+    for line in raw.splitlines():
+        if line.startswith("<<<PLAN:") and line.endswith(">>>"):
+            if current_file is not None:
+                _parse_remote_plan(current_file, current_mtime, current_lines, plans, source)
+            current_file = line[8:-3]
+            current_mtime = None
+            current_lines = []
+        elif line == "<<<END>>>":
+            if current_file is not None:
+                _parse_remote_plan(current_file, current_mtime, current_lines, plans, source)
+            current_file = None
+            current_mtime = None
+            current_lines = []
+        elif current_file is not None:
+            if current_mtime is None and line.strip().isdigit():
+                current_mtime = int(line.strip())
+            else:
+                current_lines.append(line)
+
+    if current_file is not None:
+        _parse_remote_plan(current_file, current_mtime, current_lines, plans, source)
+
+    return plans
+
+
+def _parse_remote_plan(file_path, mtime, lines, plans, source):
+    """Append a parsed plan entry to the plans list."""
+    from pathlib import PurePosixPath
+    slug = PurePosixPath(file_path).stem
+    content = "\n".join(lines)
+    title = slug
+    for line in lines:
+        if line.startswith("# "):
+            title = line[2:].strip()
+            break
+    created_at = (
+        datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+        if mtime else ""
+    )
+    plans.append({
+        "slug": slug,
+        "title": title,
+        "content": content,
+        "preview": content[:300].rstrip(),
+        "createdAt": created_at,
+        "filePath": file_path,
+        "_source": source,
+    })

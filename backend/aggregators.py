@@ -49,11 +49,13 @@ def _disk_path(server_id):
 def _save_to_disk(server_id, data):
     """Persist synced remote data to disk."""
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    # Strip _datetime objects (not JSON serializable) before saving
     clean = {
         "synced_at": data.get("synced_at"),
         "history": [{k: v for k, v in r.items() if k != "_datetime"} for r in data.get("history", [])],
         "token_logs": data.get("token_logs", []),
+        "session_plans": data.get("session_plans", []),
+        "session_tasks": data.get("session_tasks", {}),
+        "plans": data.get("plans", []),
     }
     with open(_disk_path(server_id), "w") as f:
         json.dump(clean, f)
@@ -139,6 +141,9 @@ def start_background_sync(server_id, server_config):
                     store_remote_data(server_id, {
                         "history": result["history"],
                         "token_logs": result["token_logs"],
+                        "session_plans": result.get("session_plans", []),
+                        "session_tasks": result.get("session_tasks", {}),
+                        "plans": result.get("plans", []),
                         "synced_at": result["synced_at"],
                     })
                     _sync_jobs[server_id] = {
@@ -266,16 +271,20 @@ def overview(days=0, source=None):
 
     active = get_active_sessions(source=source)
 
-    token_logs = _token_logs(source)
+    # All token logs (unfiltered) for model enrichment; filtered subset for cost.
+    all_token_logs = _token_logs(source=None)
+    if source and source != "all":
+        token_logs = [t for t in all_token_logs if t.get("_source") == source]
+    else:
+        token_logs = all_token_logs
 
-    # Enrich local active sessions with their most recently used model.
-    # We reuse the already-cached token_logs to avoid extra file opens.
-    local_active = {s["sessionId"]: s for s in active if s.get("_source") == "local"}
-    if local_active:
+    # Enrich every active session (local + SSH) with its most recently used model.
+    active_by_sid = {s["sessionId"]: s for s in active}
+    if active_by_sid:
         latest_models = {}  # {sessionId: (timestamp, model)}
-        for t in token_logs:
+        for t in all_token_logs:
             sid = t.get("sessionId", "")
-            if sid not in local_active:
+            if sid not in active_by_sid:
                 continue
             model = t.get("model", "")
             if not model:
@@ -285,7 +294,7 @@ def overview(days=0, source=None):
             if prev is None or ts > prev[0]:
                 latest_models[sid] = (ts, model)
         for sid, (_, model) in latest_models.items():
-            local_active[sid]["model"] = model
+            active_by_sid[sid]["model"] = model
     if cutoff:
         token_logs_filtered = [
             t for t in token_logs
@@ -465,8 +474,18 @@ def daily_token_cost(source=None):
 
 
 def _annotations():
-    """Cached single-pass scan of session files for plans and tasks."""
-    return _get_cached("session_annotations", scan_session_annotations)
+    """Cached local scan merged with remote annotation data."""
+    local_plans, local_tasks = _get_cached("session_annotations", scan_session_annotations)
+
+    all_plans = list(local_plans)
+    all_tasks = dict(local_tasks)
+
+    for data in _remote_data.values():
+        all_plans.extend(data.get("session_plans", []))
+        for sid, tasks in data.get("session_tasks", {}).items():
+            all_tasks[sid] = tasks
+
+    return all_plans, all_tasks
 
 
 def sessions_list(source=None):
@@ -522,8 +541,15 @@ def sessions_list(source=None):
 
 
 def plans_list():
-    """Return all plans merged with their session binding."""
+    """Return all plans (local + remote) merged with their session binding."""
+    # Merge local plan files with remote plan files keyed by slug
     plan_files = {p["slug"]: p for p in _get_cached("plans", parse_plans)}
+    for data in _remote_data.values():
+        for p in data.get("plans", []):
+            slug = p["slug"]
+            if slug not in plan_files:
+                plan_files[slug] = p
+
     session_plans_raw, _ = _annotations()
 
     # Deduplicate: one entry per slug, keeping the latest occurrence

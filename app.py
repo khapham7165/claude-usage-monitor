@@ -175,10 +175,11 @@ def api_create_account():
             org_name = orgs[0]["name"] if orgs else ""
             name = f"{bootstrap.get('display_name', '')} - {org_name}".strip(" -")
 
+        orgs = bootstrap.get("organizations", [])
         acc = save_account({
             "name": name,
             "session_key": session_key,
-            "org_id": "",
+            "org_id": orgs[0]["uuid"] if orgs else "",
             "account_uuid": bootstrap.get("account_uuid", ""),
         })
         return jsonify({"success": True, "account": {
@@ -197,6 +198,31 @@ def api_active_account():
     accounts = list_accounts()
     active_id = next((a["id"] for a in accounts if a.get("org_id") == org_uuid), None)
     return jsonify({"activeAccountId": active_id, "orgUuid": org_uuid})
+
+
+@app.route("/api/accounts/<account_id>/refresh-identity", methods=["POST"])
+def api_refresh_account_identity(account_id):
+    """Re-fetch org_id and account_uuid from the bootstrap API.
+    Useful for accounts that were added before org_id was being saved,
+    so they can be matched to Keychain / SSH credential blobs.
+    """
+    acc = get_account(account_id)
+    if not acc:
+        return jsonify({"error": "Account not found"}), 404
+    session_key = acc.get("session_key", "")
+    if not session_key:
+        return jsonify({"error": "Account has no session_key"}), 400
+    try:
+        bootstrap = fetch_bootstrap(session_key)
+        if "error" in bootstrap:
+            return jsonify({"error": bootstrap["error"]}), 401
+        orgs = bootstrap.get("organizations", [])
+        acc["org_id"] = orgs[0]["uuid"] if orgs else acc.get("org_id", "")
+        acc["account_uuid"] = bootstrap.get("account_uuid", acc.get("account_uuid", ""))
+        save_account(acc)
+        return jsonify({"success": True, "org_id": acc["org_id"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/accounts/<account_id>/capture", methods=["POST"])
@@ -325,6 +351,26 @@ def api_sync_status():
     return jsonify(aggregators.get_all_sync_jobs())
 
 
+def _match_org_uuid(org_uuid):
+    """Find a local account matching an org UUID.
+    Checks org_id field AND credential_blob.organizationUuid (accounts added via
+    session_key only may not have org_id populated until usage is fetched).
+    Returns dict with matched_account_id and matched_account_name.
+    """
+    if not org_uuid:
+        return {"matched_account_id": None, "matched_account_name": None}
+    for a in list_accounts():
+        full = get_account(a["id"])
+        if not full:
+            continue
+        if full.get("org_id") == org_uuid:
+            return {"matched_account_id": a["id"], "matched_account_name": a.get("name", "")}
+        blob_org = (full.get("credential_blob") or {}).get("organizationUuid", "")
+        if blob_org and blob_org == org_uuid:
+            return {"matched_account_id": a["id"], "matched_account_name": a.get("name", "")}
+    return {"matched_account_id": None, "matched_account_name": None}
+
+
 @app.route("/api/sources/<server_id>/info", methods=["GET"])
 def api_source_info(server_id):
     """Live read of active account + model for a source.
@@ -334,8 +380,6 @@ def api_source_info(server_id):
     if server_id == "local":
         from backend.auth import get_active_org_uuid
         org_uuid = get_active_org_uuid() or ""
-        accounts = list_accounts()
-        matched = next((a for a in accounts if a.get("org_id") == org_uuid), None)
         model = "claude-sonnet-4-6"
         if _CLAUDE_SETTINGS.exists():
             try:
@@ -347,8 +391,7 @@ def api_source_info(server_id):
             "has_credentials": bool(org_uuid),
             "org_uuid": org_uuid,
             "model": model,
-            "matched_account_id": matched["id"] if matched else None,
-            "matched_account_name": matched["name"] if matched else None,
+            **_match_org_uuid(org_uuid),
         })
 
     srv = get_server(server_id)
@@ -357,19 +400,9 @@ def api_source_info(server_id):
 
     info = get_remote_source_info(srv)
 
-    # Match org_uuid against local accounts
-    matched = None
-    if info.get("org_uuid"):
-        for a in list_accounts():
-            full = get_account(a["id"])
-            if full and full.get("org_id") == info["org_uuid"]:
-                matched = a
-                break
-
     return jsonify({
         **info,
-        "matched_account_id": matched["id"] if matched else None,
-        "matched_account_name": matched["name"] if matched else None,
+        **_match_org_uuid(info.get("org_uuid", "")),
     })
 
 

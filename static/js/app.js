@@ -664,12 +664,12 @@ function _populateAccountSelect(card, sourceId, accounts, info) {
         sel.appendChild(captureOpt);
     }
 
-    // Show import hint if remote has unmatched account
-    if (info.has_credentials && !info.matched_account_id && sourceId !== 'local') {
-        importHint.classList.remove('hidden');
-    } else {
-        importHint.classList.add('hidden');
-    }
+    // Show import hint only when: remote has credentials, no match found,
+    // AND the user already has at least one captured account (so they've set up the workflow).
+    // If nobody has captured anything yet, the hint is premature noise.
+    const showImport = info.has_credentials && !info.matched_account_id
+                       && sourceId !== 'local' && switchable.length > 0;
+    importHint.classList.toggle('hidden', !showImport);
 }
 
 function _populateModelSelect(card, sourceId, currentModel) {
@@ -895,11 +895,13 @@ async function loadAccountsList() {
                 <div class="item-name">
                     ${acc.name || 'Unnamed'}
                     ${isActive ? '<span class="active-account-badge">● Active</span>' : ''}
+                    ${!acc.org_id && acc.hasKey ? '<span class="active-account-badge" style="background:var(--warning,#d29922);color:#fff;" title="org_id not set — click Sync ID to link this account to credential files">⚠ unlinked</span>' : ''}
                 </div>
                 <div class="item-detail"><code>${acc.maskedKey}</code></div>
             </div>
             <div class="list-item-actions">
                 <select class="source-select-sm" data-link-acc="${acc.id}">${opts}</select>
+                ${!acc.org_id && acc.hasKey ? `<button class="btn btn-sm btn-ghost" data-sync-id="${acc.id}" title="Fetch org identity from claude.ai so this account can be matched to credential files">Sync ID</button>` : ''}
                 <button class="btn btn-sm btn-ghost" data-capture-acc="${acc.id}" title="Save current Claude Code session to this account">${acc.hasCredential ? 'Re-capture' : 'Capture'}</button>
                 ${acc.hasCredential && !isActive ? `<button class="btn btn-sm btn-primary" data-activate-acc="${acc.id}">Switch</button>` : ''}
                 <button class="btn btn-sm btn-danger" data-delete-acc="${acc.id}">Remove</button>
@@ -915,6 +917,17 @@ async function loadAccountsList() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ linked_source: sel.value }),
             });
+        });
+    });
+
+    // Sync ID handler — fetches org_id from bootstrap so account matches credential files
+    container.querySelectorAll('[data-sync-id]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            btn.disabled = true; btn.textContent = 'Syncing...';
+            const res = await fetch(`/api/accounts/${btn.dataset.syncId}/refresh-identity`, { method: 'POST' });
+            const data = await res.json();
+            if (data.success) { loadAccountsList(); loadSourcesList(); }
+            else { btn.textContent = data.error || 'Failed'; btn.style.color = 'var(--danger)'; btn.disabled = false; }
         });
     });
 

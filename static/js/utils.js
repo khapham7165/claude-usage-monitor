@@ -53,3 +53,22 @@ function formatDateShort(dateStr) {
     const d = new Date(dateStr + 'T00:00:00');
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
+
+function getModelShortName(model) {
+    if (!model) return '--';
+    if (model.includes('opus') && model.includes('4-6')) return 'Opus 4.6';
+    if (model.includes('opus') && model.includes('4-5')) return 'Opus 4.5';
+    if (model.includes('sonnet') && model.includes('4-6')) return 'Sonnet 4.6';
+    if (model.includes('sonnet') && model.includes('4-5')) return 'Sonnet 4.5';
+    if (model.includes('haiku') && model.includes('4-5')) return 'Haiku 4.5';
+    if (model.includes('haiku')) return 'Haiku';
+    return model;
+}
+
+function getModelClass(model) {
+    if (!model) return '';
+    if (model.includes('opus')) return 'opus';
+    if (model.includes('sonnet')) return 'sonnet';
+    if (model.includes('haiku')) return 'haiku';
+    return '';
+}

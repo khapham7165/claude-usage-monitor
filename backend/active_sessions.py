@@ -35,6 +35,7 @@ def get_local_active_sessions():
                 "entrypoint": session.get("entrypoint", ""),
                 "_source": "local",
             })
+
     return active
 
 
@@ -45,6 +46,7 @@ def get_remote_active_sessions(server_config):
     server_id = server_config["id"]
     source = f"ssh:{server_id}"
 
+    client = None
     try:
         client = _connect(server_config)
         home = _exec(client, "echo $HOME").strip()
@@ -89,10 +91,12 @@ def get_remote_active_sessions(server_config):
                     "_host": server_config.get("host", ""),
                 })
 
-        client.close()
         return active
     except Exception:
         return []
+    finally:
+        if client:
+            client.close()
 
 
 def get_active_sessions(source=None):

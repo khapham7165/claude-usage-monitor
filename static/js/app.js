@@ -114,10 +114,13 @@ function renderActiveSessions(sessions) {
     for (const s of sessions) {
         const src = s._source || 'local';
         const srcLabel = s._host || sourceLabel(src);
+        const modelName = getModelShortName(s.model || '');
+        const modelCls = getModelClass(s.model || '');
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td><code>${s.pid}</code></td>
             <td>${(s.cwd || '').split('/').pop()}</td>
+            <td><span class="model-badge ${modelCls}">${modelName}</span></td>
             <td><span class="source-tag">${srcLabel}</span></td>
             <td>${formatDate(new Date(s.startedAt).toISOString())}</td>
             <td>${formatDuration(Date.now() - s.startedAt)}</td>
@@ -160,12 +163,22 @@ async function loadHeatmap() { renderHeatmap('heatmapContainer', await fetchJSON
 async function loadTokens() { const d = await fetchJSON(apiUrl('/api/tokens')); createModelDoughnut('modelChart', d); renderModelTable('modelTable', d); }
 async function loadCostTrend() { createCostChart('costChart', await fetchJSON(apiUrl('/api/tokens/daily'))); }
 
-// ── Sessions loaders ────────────────────────────────────────
-async function loadSessions() {
-    const data = await fetchJSON(apiUrl('/api/sessions'));
+// ── Sessions pagination state ───────────────────────────────
+let _allSessions = [];
+let _sessionsPage = 0;
+let _sessionsPageSize = 25;
+
+function _renderSessionsPage() {
     const tbody = document.getElementById('sessionsBody');
+    const total = _allSessions.length;
+    const totalPages = Math.max(1, Math.ceil(total / _sessionsPageSize));
+    _sessionsPage = Math.min(_sessionsPage, totalPages - 1);
+
+    const start = _sessionsPage * _sessionsPageSize;
+    const slice = _allSessions.slice(start, start + _sessionsPageSize);
+
     tbody.innerHTML = '';
-    for (const s of data.slice(0, 50)) {
+    for (const s of slice) {
         const srcLabel = sourceLabel(s.source);
         const tr = document.createElement('tr');
         tr.innerHTML = `
@@ -178,15 +191,48 @@ async function loadSessions() {
             <td><span class="status-badge ${s.isActive ? 'status-active' : 'status-completed'}">${s.isActive ? 'Active' : 'Done'}</span></td>`;
         tbody.appendChild(tr);
     }
+
+    document.getElementById('sessionsTotalLabel').textContent = `${total} sessions`;
+    document.getElementById('pageInfo').textContent = `Page ${_sessionsPage + 1} of ${totalPages}`;
+    document.getElementById('pageFirst').disabled = _sessionsPage === 0;
+    document.getElementById('pagePrev').disabled = _sessionsPage === 0;
+    document.getElementById('pageNext').disabled = _sessionsPage >= totalPages - 1;
+    document.getElementById('pageLast').disabled = _sessionsPage >= totalPages - 1;
+    document.getElementById('sessionsPagination').classList.toggle('hidden', total === 0);
 }
+
+// ── Sessions loaders ────────────────────────────────────────
+async function loadSessions() {
+    _allSessions = await fetchJSON(apiUrl('/api/sessions'));
+    _sessionsPage = 0;
+    _renderSessionsPage();
+}
+
+document.getElementById('pageFirst').addEventListener('click', () => { _sessionsPage = 0; _renderSessionsPage(); });
+document.getElementById('pagePrev').addEventListener('click', () => { _sessionsPage--; _renderSessionsPage(); });
+document.getElementById('pageNext').addEventListener('click', () => { _sessionsPage++; _renderSessionsPage(); });
+document.getElementById('pageLast').addEventListener('click', () => { _sessionsPage = Math.ceil(_allSessions.length / _sessionsPageSize) - 1; _renderSessionsPage(); });
+document.getElementById('pageSizeSelect').addEventListener('change', (e) => {
+    _sessionsPageSize = parseInt(e.target.value);
+    _sessionsPage = 0;
+    _renderSessionsPage();
+});
 
 // ── Tab-aware loading ───────────────────────────────────────
 async function loadAnalytics() {
     await Promise.all([loadOverview(), loadActivity(), loadProjects(), loadHeatmap(), loadTokens(), loadCostTrend()]);
 }
 
+async function loadModelSetting() {
+    try {
+        const data = await fetchJSON('/api/settings/model');
+        const sel = document.getElementById('globalModelSelect');
+        if (sel && data.model) sel.value = data.model;
+    } catch {}
+}
+
 async function loadSessionsTab() {
-    await Promise.all([loadOverview(), loadSessions()]);
+    await Promise.all([loadOverview(), loadSessions(), loadModelSetting()]);
     renderActiveSessions(_lastActiveSessions);
 }
 
@@ -539,6 +585,32 @@ document.getElementById('addServerBtn').addEventListener('click', async () => {
 });
 
 document.getElementById('refreshUsageBtn').addEventListener('click', loadAccountUsage);
+
+document.getElementById('globalModelSelect').addEventListener('change', async (e) => {
+    const model = e.target.value;
+    const status = document.getElementById('modelSaveStatus');
+    status.textContent = 'Saving...';
+    status.style.color = 'var(--text-muted)';
+    try {
+        const res = await fetch('/api/settings/model', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model }),
+        });
+        const data = await res.json();
+        if (data.success) {
+            status.textContent = 'Saved';
+            status.style.color = 'var(--accent2)';
+        } else {
+            status.textContent = data.error || 'Failed';
+            status.style.color = 'var(--danger)';
+        }
+    } catch {
+        status.textContent = 'Error';
+        status.style.color = 'var(--danger)';
+    }
+    setTimeout(() => { status.textContent = ''; }, 2000);
+});
 
 // ── Initial load ────────────────────────────────────────────
 loadPrefs();                       // Restore saved state

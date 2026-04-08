@@ -5,6 +5,7 @@ import os
 import json
 import urllib.request
 import urllib.error
+from pathlib import Path
 from flask import Flask, jsonify, request, render_template
 from backend import aggregators
 from backend.active_sessions import get_active_sessions
@@ -20,6 +21,13 @@ from backend.ssh_collector import (
 
 app = Flask(__name__)
 PORT = 5111
+
+_CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
+_AVAILABLE_MODELS = [
+    {"id": "claude-sonnet-4-6", "name": "Sonnet 4.6"},
+    {"id": "claude-opus-4-6", "name": "Opus 4.6"},
+    {"id": "claude-haiku-4-5-20251001", "name": "Haiku 4.5"},
+]
 
 # Auto-migrate legacy single-account config
 migrate_single_to_accounts()
@@ -107,14 +115,17 @@ def api_kill_session():
         srv = get_server(server_id)
         if not srv:
             return jsonify({"error": "Server not found"}), 404
+        client = None
         try:
             from backend.ssh_collector import _connect, _exec
             client = _connect(srv)
             _exec(client, f"kill {pid}")
-            client.close()
             return jsonify({"success": True, "pid": pid, "source": source})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+        finally:
+            if client:
+                client.close()
     else:
         return jsonify({"error": "Unknown source"}), 400
 
@@ -274,6 +285,42 @@ def api_sync_status():
     return jsonify(aggregators.get_all_sync_jobs())
 
 
+# ── Model Settings ──────────────────────────────────────────
+@app.route("/api/settings/model", methods=["GET"])
+def api_get_model():
+    model = "claude-sonnet-4-6"
+    if _CLAUDE_SETTINGS.exists():
+        try:
+            with open(_CLAUDE_SETTINGS) as f:
+                model = json.load(f).get("model", model)
+        except Exception:
+            pass
+    return jsonify({"model": model, "available": _AVAILABLE_MODELS})
+
+
+@app.route("/api/settings/model", methods=["POST"])
+def api_set_model():
+    data = request.get_json()
+    model = (data.get("model") or "").strip()
+    valid_ids = {m["id"] for m in _AVAILABLE_MODELS}
+    if not model or model not in valid_ids:
+        return jsonify({"error": "Invalid model"}), 400
+
+    settings = {}
+    if _CLAUDE_SETTINGS.exists():
+        try:
+            with open(_CLAUDE_SETTINGS) as f:
+                settings = json.load(f)
+        except Exception:
+            pass
+
+    settings["model"] = model
+    with open(_CLAUDE_SETTINGS, "w") as f:
+        json.dump(settings, f, indent=2)
+
+    return jsonify({"success": True, "model": model})
+
+
 # ── Auth (API key / OAuth) ───────────────────────────────────
 @app.route("/api/account/status")
 def api_account_status():
@@ -316,9 +363,9 @@ def api_account_api_usage():
             },
             method="POST",
         )
-        resp = urllib.request.urlopen(req, timeout=15)
-        headers = dict(resp.headers)
-        body = json.loads(resp.read())
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            headers = dict(resp.headers)
+            body = json.loads(resp.read())
         return jsonify({
             "valid": True, "source": source,
             "model_used": body.get("model"),

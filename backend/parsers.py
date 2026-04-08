@@ -118,3 +118,33 @@ def parse_project_session_logs():
             except Exception:
                 continue
     return results
+
+
+def get_latest_session_models():
+    """Return dict of {sessionId: model} based on the most recent assistant message per session."""
+    latest = {}  # {sessionId: (timestamp_str, model)}
+    for project_dir in _list_project_dirs():
+        for jsonl_file in project_dir.glob("*.jsonl"):
+            session_id = jsonl_file.stem
+            try:
+                with open(jsonl_file, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            record = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if record.get("type") != "assistant":
+                            continue
+                        model = record.get("message", {}).get("model", "")
+                        if not model:
+                            continue
+                        ts = record.get("timestamp", "")
+                        prev = latest.get(session_id)
+                        if prev is None or ts > prev[0]:
+                            latest[session_id] = (ts, model)
+            except Exception:
+                continue
+    return {sid: info[1] for sid, info in latest.items()}

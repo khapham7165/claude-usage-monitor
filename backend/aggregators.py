@@ -267,6 +267,25 @@ def overview(days=0, source=None):
     active = get_active_sessions(source=source)
 
     token_logs = _token_logs(source)
+
+    # Enrich local active sessions with their most recently used model.
+    # We reuse the already-cached token_logs to avoid extra file opens.
+    local_active = {s["sessionId"]: s for s in active if s.get("_source") == "local"}
+    if local_active:
+        latest_models = {}  # {sessionId: (timestamp, model)}
+        for t in token_logs:
+            sid = t.get("sessionId", "")
+            if sid not in local_active:
+                continue
+            model = t.get("model", "")
+            if not model:
+                continue
+            ts = t.get("timestamp", "")
+            prev = latest_models.get(sid)
+            if prev is None or ts > prev[0]:
+                latest_models[sid] = (ts, model)
+        for sid, (_, model) in latest_models.items():
+            local_active[sid]["model"] = model
     if cutoff:
         token_logs_filtered = [
             t for t in token_logs

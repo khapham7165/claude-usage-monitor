@@ -118,23 +118,51 @@
 
             <!-- TAB: Sessions -->
             <div id="tabSessions" class="tab-content hidden">
+                <div class="sessions-toolbar">
+                    <div class="model-switcher">
+                        <span class="model-switcher-label">Default model:</span>
+                        <select id="globalModelSelect" class="model-select">
+                            <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+                            <option value="claude-opus-4-6">Opus 4.6</option>
+                            <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                        </select>
+                        <span id="modelSaveStatus" class="model-save-status"></span>
+                        <span class="model-switcher-hint">applies to new sessions</span>
+                    </div>
+                </div>
+
                 <div id="activeSessionsCard" class="card full-width hidden">
                     <h2>Active Sessions <span class="badge" id="activeCount">0</span></h2>
                     <div class="table-container">
                         <table id="activeSessionsTable">
-                            <thead><tr><th>PID</th><th>Project</th><th>Source</th><th>Started</th><th>Uptime</th><th>Type</th><th>Action</th></tr></thead>
+                            <thead><tr><th>PID</th><th>Project</th><th>Last Model</th><th>Source</th><th>Started</th><th>Uptime</th><th>Type</th><th>Action</th></tr></thead>
                             <tbody id="activeSessionsBody"></tbody>
                         </table>
                     </div>
                 </div>
 
                 <div class="card full-width">
-                    <h2>Session History</h2>
+                    <div class="card-header-row">
+                        <h2>Session History</h2>
+                        <span id="sessionsTotalLabel" class="sessions-total"></span>
+                    </div>
                     <div class="table-container">
                         <table id="sessionsTable">
                             <thead><tr><th>Session ID</th><th>Project</th><th>Source</th><th>Start Time</th><th>Duration</th><th>Messages</th><th>Status</th></tr></thead>
                             <tbody id="sessionsBody"></tbody>
                         </table>
+                    </div>
+                    <div class="pagination" id="sessionsPagination">
+                        <button class="page-btn" id="pageFirst" title="First page">&laquo;</button>
+                        <button class="page-btn" id="pagePrev">&lsaquo; Prev</button>
+                        <span class="page-info" id="pageInfo"></span>
+                        <button class="page-btn" id="pageNext">Next &rsaquo;</button>
+                        <button class="page-btn" id="pageLast" title="Last page">&raquo;</button>
+                        <select class="page-size-select" id="pageSizeSelect">
+                            <option value="25">25 / page</option>
+                            <option value="50">50 / page</option>
+                            <option value="100">100 / page</option>
+                        </select>
                     </div>
                 </div>
             </div>

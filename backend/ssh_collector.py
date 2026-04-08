@@ -68,14 +68,16 @@ def _connect(server_config):
 def _exec(client, cmd):
     """Run a command over SSH and return stdout as string."""
     _, stdout, stderr = client.exec_command(cmd, timeout=30)
-    out = stdout.read().decode("utf-8", errors="replace")
-    stdout.close()
-    stderr.close()
-    return out
+    try:
+        return stdout.read().decode("utf-8", errors="replace")
+    finally:
+        stdout.close()
+        stderr.close()
 
 
 def test_connection(server_config):
     """Test SSH connection and verify ~/.claude/ exists."""
+    client = None
     try:
         client = _connect(server_config)
         home = _exec(client, "echo $HOME").strip()
@@ -83,14 +85,15 @@ def test_connection(server_config):
 
         check = _exec(client, f"test -d {claude_dir} && echo yes || echo no").strip()
         if check != "yes":
-            client.close()
             return {"success": False, "error": f"~/.claude/ not found at {claude_dir}"}
 
         has_history = _exec(client, f"test -f {claude_dir}/history.jsonl && echo yes || echo no").strip() == "yes"
-        client.close()
         return {"success": True, "home": home, "claude_dir": claude_dir, "has_history": has_history}
     except Exception as e:
         return {"success": False, "error": str(e)}
+    finally:
+        if client:
+            client.close()
 
 
 # ── Data sync (uses exec_command, not per-file SFTP) ─────────
@@ -104,6 +107,7 @@ def sync_server(server_config, progress_cb=None):
         if progress_cb:
             progress_cb(step, detail)
 
+    client = None
     try:
         _progress("connecting", f"{server_config.get('user', 'root')}@{server_config['host']}")
         client = _connect(server_config)
@@ -120,7 +124,6 @@ def sync_server(server_config, progress_cb=None):
 
         # Discover project session files
         _progress("reading_projects", "Listing project files")
-        # List all .jsonl files under projects/ with their paths
         file_list_raw = _exec(client, f"find {claude_dir}/projects -name '*.jsonl' -type f 2>/dev/null")
         jsonl_files = [f.strip() for f in file_list_raw.splitlines() if f.strip()]
         _progress("reading_projects", f"Found {len(jsonl_files)} session files")
@@ -131,7 +134,6 @@ def sync_server(server_config, progress_cb=None):
             token_logs = _read_project_files_batched(client, jsonl_files, claude_dir, source, _progress)
 
         _progress("done", f"{len(history)} msgs, {len(token_logs)} token logs")
-        client.close()
 
         return {
             "success": True,
@@ -144,6 +146,9 @@ def sync_server(server_config, progress_cb=None):
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+    finally:
+        if client:
+            client.close()
 
 
 def _read_project_files_batched(client, jsonl_files, claude_dir, source, progress_cb):

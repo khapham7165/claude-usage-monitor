@@ -96,24 +96,19 @@ def delete_account(account_id):
 
 # ── Claude.ai API calls ─────────────────────────────────────
 
-def fetch_bootstrap(session_key):
-    scraper = _get_scraper(session_key)
+def _api_bootstrap(scraper):
     resp = scraper.get("https://claude.ai/api/bootstrap", headers=_headers())
     if resp.status_code != 200:
         return {"error": f"HTTP {resp.status_code}", "status": resp.status_code}
     data = resp.json()
     account = data.get("account", {})
-
     memberships = account.get("memberships", [])
-    orgs = []
-    for m in memberships:
-        org = m.get("organization", {})
-        orgs.append({
-            "uuid": org.get("uuid"),
-            "name": org.get("name"),
-            "role": m.get("role"),
-        })
-
+    orgs = [
+        {"uuid": m.get("organization", {}).get("uuid"),
+         "name": m.get("organization", {}).get("name"),
+         "role": m.get("role")}
+        for m in memberships
+    ]
     return {
         "account_uuid": account.get("uuid"),
         "email": account.get("email_address"),
@@ -123,8 +118,7 @@ def fetch_bootstrap(session_key):
     }
 
 
-def fetch_usage(session_key, org_id):
-    scraper = _get_scraper(session_key)
+def _api_usage(scraper, org_id):
     resp = scraper.get(
         f"https://claude.ai/api/organizations/{org_id}/usage",
         headers=_headers(),
@@ -134,8 +128,7 @@ def fetch_usage(session_key, org_id):
     return resp.json()
 
 
-def fetch_spend_limit(session_key, org_id, account_uuid):
-    scraper = _get_scraper(session_key)
+def _api_spend_limit(scraper, org_id, account_uuid):
     resp = scraper.get(
         f"https://claude.ai/api/organizations/{org_id}/overage_spend_limit"
         f"?account_uuid={account_uuid}",
@@ -143,12 +136,10 @@ def fetch_spend_limit(session_key, org_id, account_uuid):
     )
     if resp.status_code != 200:
         return None
-    data = resp.json()
-    return data if data else None
+    return resp.json() or None
 
 
-def fetch_overage_credit_grant(session_key, org_id):
-    scraper = _get_scraper(session_key)
+def _api_overage_credit_grant(scraper, org_id):
     resp = scraper.get(
         f"https://claude.ai/api/organizations/{org_id}/overage_credit_grant",
         headers=_headers(),
@@ -158,8 +149,7 @@ def fetch_overage_credit_grant(session_key, org_id):
     return resp.json()
 
 
-def fetch_prepaid_credits(session_key, org_id):
-    scraper = _get_scraper(session_key)
+def _api_prepaid_credits(scraper, org_id):
     resp = scraper.get(
         f"https://claude.ai/api/organizations/{org_id}/prepaid/credits",
         headers=_headers(),
@@ -169,8 +159,17 @@ def fetch_prepaid_credits(session_key, org_id):
     return resp.json()
 
 
+def fetch_bootstrap(session_key):
+    """Standalone bootstrap fetch (used when adding accounts)."""
+    scraper = _get_scraper(session_key)
+    try:
+        return _api_bootstrap(scraper)
+    finally:
+        scraper.close()
+
+
 def fetch_full_account_usage(account_id):
-    """Fetch complete usage for an account by its ID."""
+    """Fetch complete usage for an account using a single shared HTTP session."""
     acc = get_account(account_id)
     if not acc:
         return {"error": "Account not found"}
@@ -179,25 +178,29 @@ def fetch_full_account_usage(account_id):
     if not session_key:
         return {"error": "No session key"}
 
-    bootstrap = fetch_bootstrap(session_key)
-    if "error" in bootstrap:
-        return bootstrap
+    scraper = _get_scraper(session_key)
+    try:
+        bootstrap = _api_bootstrap(scraper)
+        if "error" in bootstrap:
+            return bootstrap
 
-    account_uuid = bootstrap["account_uuid"]
-    orgs = bootstrap.get("organizations", [])
-    if not orgs:
-        return {"error": "No organizations found"}
+        account_uuid = bootstrap["account_uuid"]
+        orgs = bootstrap.get("organizations", [])
+        if not orgs:
+            return {"error": "No organizations found"}
 
-    org_id = acc.get("org_id") if acc.get("org_id") and any(o["uuid"] == acc.get("org_id") for o in orgs) else orgs[0]["uuid"]
+        org_id = acc.get("org_id") if acc.get("org_id") and any(o["uuid"] == acc.get("org_id") for o in orgs) else orgs[0]["uuid"]
 
-    acc["org_id"] = org_id
-    acc["account_uuid"] = account_uuid
-    save_account(acc)
+        acc["org_id"] = org_id
+        acc["account_uuid"] = account_uuid
+        save_account(acc)
 
-    usage = fetch_usage(session_key, org_id)
-    spend_limit = fetch_spend_limit(session_key, org_id, account_uuid)
-    overage_grant = fetch_overage_credit_grant(session_key, org_id)
-    prepaid = fetch_prepaid_credits(session_key, org_id)
+        usage = _api_usage(scraper, org_id)
+        spend_limit = _api_spend_limit(scraper, org_id, account_uuid)
+        overage_grant = _api_overage_credit_grant(scraper, org_id)
+        prepaid = _api_prepaid_credits(scraper, org_id)
+    finally:
+        scraper.close()
 
     # Determine account type and build unified stats
     is_enterprise = bool(spend_limit and spend_limit.get("seat_tier"))

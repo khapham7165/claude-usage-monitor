@@ -55,9 +55,12 @@ def get_current_credential_blob():
 
 
 def get_active_org_uuid():
-    """Return the organizationUuid from the current Keychain credentials."""
+    """Return the organizationUuid from the current Keychain credentials.
+    Checks top-level and nested under claudeAiOauth (Linux file format)."""
     blob = _read_keychain_blob()
-    return blob.get("organizationUuid") if blob else None
+    if not blob:
+        return None
+    return blob.get("organizationUuid") or (blob.get("claudeAiOauth") or {}).get("organizationUuid")
 
 
 def apply_credential_blob(blob):

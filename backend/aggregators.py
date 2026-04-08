@@ -167,12 +167,13 @@ def clear_remote_data(server_id):
     invalidate_cache()
 
 
-def start_background_sync(server_id, server_config):
+def start_background_sync(server_id, server_config, sync_types=None):
     """Launch a background thread to sync a remote server.
 
     Loads the existing cursor to enable incremental sync.
     Saves the new cursor after a successful sync.
     First sync (no cursor) is always a full sync.
+    sync_types: list of 'history', 'sessions', 'plans'. None means all three.
     """
     from backend.ssh_collector import sync_server
     from backend.cursor import load_cursor, save_cursor
@@ -200,14 +201,13 @@ def start_background_sync(server_id, server_config):
     def _do_sync():
         cursor = load_cursor(server_id)
         try:
-            result = sync_server(server_config, progress_cb=_on_progress, cursor=cursor)
+            result = sync_server(server_config, progress_cb=_on_progress, cursor=cursor, sync_types=sync_types)
             with _sync_lock:
                 if result.get("success"):
                     is_incremental = result.get("incremental", False)
-                    # If history was truncated, sync_server signals a full re-fetch;
-                    # force merge=False so stored history is replaced not appended.
                     history_is_full = result.get("history_is_full", False)
                     do_merge = is_incremental and not history_is_full
+                    synced = set(result.get("synced_types", ["history", "sessions", "plans"]))
 
                     data = {
                         "history": result["history"],
@@ -219,6 +219,18 @@ def start_background_sync(server_id, server_config):
                         "active_model": result.get("active_model", ""),
                         "synced_at": result["synced_at"],
                     }
+
+                    # Partial sync: keep existing data for unsynced types
+                    existing = _remote_data.get(server_id, {})
+                    if "history" not in synced:
+                        data["history"] = existing.get("history", [])
+                    if "sessions" not in synced:
+                        data["token_logs"] = existing.get("token_logs", [])
+                        data["session_plans"] = existing.get("session_plans", [])
+                        data["session_tasks"] = existing.get("session_tasks", {})
+                    if "plans" not in synced:
+                        data["plans"] = existing.get("plans", [])
+
                     store_remote_data(server_id, data, merge=do_merge)
                     save_cursor(server_id, result["new_cursor"])
 

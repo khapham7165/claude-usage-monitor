@@ -187,13 +187,33 @@
             <!-- TAB: Settings -->
             <div id="tabSettings" class="tab-content hidden" style="max-width: 700px;">
 
-                <!-- Sources (unified: local + SSH) -->
+                <!-- Accounts -->
+                <div class="setting-group">
+                    <label>Accounts</label>
+                    <p class="setting-desc">Your Claude.ai identities. An account can have a session key (for usage tracking), captured credentials (for auth switching), or both.</p>
+                    <div id="accountsList"></div>
+                    <div class="settings-add-row" style="margin-top: 10px;">
+                        <button class="btn btn-sm btn-ghost" id="toggleAddAccount">+ Add via Session Key</button>
+                        <div id="addAccountForm" class="add-form hidden" style="margin-top: 8px;">
+                            <p class="setting-desc" style="margin-bottom:8px;">Get sessionKey from: claude.ai &rarr; DevTools (F12) &rarr; Application &rarr; Cookies &rarr; <code>sessionKey</code></p>
+                            <input type="text" id="newAccountName" placeholder="Account name (optional)" class="text-input" style="margin-bottom: 6px;">
+                            <div class="key-input-row">
+                                <input type="password" id="newAccountKey" placeholder="sk-ant-sid02-..." class="text-input">
+                                <button class="btn btn-primary" id="addAccountBtn">Add</button>
+                            </div>
+                            <div id="addAccountStatus" class="key-status"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <hr style="border-color: var(--border); margin: 20px 0;">
+
+                <!-- Sources -->
                 <div class="setting-group">
                     <label>Sources</label>
-                    <p class="setting-desc">Account and model apply to new sessions. Changes take effect immediately.</p>
+                    <p class="setting-desc">Machines running Claude Code. Assign which account and model each uses; sync to pull usage history.</p>
                     <div id="sourcesList"></div>
-                    <!-- Add SSH server -->
-                    <div class="add-ssh-row" style="margin-top: 10px;">
+                    <div class="settings-add-row" style="margin-top: 10px;">
                         <button class="btn btn-sm btn-ghost" id="toggleAddServer">+ Add SSH Server</button>
                         <div id="addServerForm" class="add-form hidden" style="margin-top: 8px;">
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px;">
@@ -207,24 +227,6 @@
                             </div>
                             <div id="addServerStatus" class="key-status"></div>
                         </div>
-                    </div>
-                </div>
-
-                <hr style="border-color: var(--border); margin: 20px 0;">
-
-                <!-- Accounts (credential store) -->
-                <div class="setting-group">
-                    <label>Accounts</label>
-                    <p class="setting-desc">Claude.ai credentials — used to switch accounts on sources above.
-                        Get sessionKey from: claude.ai &rarr; DevTools (F12) &rarr; Application &rarr; Cookies.</p>
-                    <div id="accountsList"></div>
-                    <div class="add-form" style="margin-top: 12px;">
-                        <input type="text" id="newAccountName" placeholder="Account name (optional)" class="text-input" style="margin-bottom: 6px;">
-                        <div class="key-input-row">
-                            <input type="password" id="newAccountKey" placeholder="sk-ant-sid02-..." class="text-input">
-                            <button class="btn btn-primary" id="addAccountBtn">Add</button>
-                        </div>
-                        <div id="addAccountStatus" class="key-status"></div>
                     </div>
                 </div>
 

@@ -181,6 +181,11 @@ def api_create_account():
             "session_key": session_key,
             "org_id": orgs[0]["uuid"] if orgs else "",
             "account_uuid": bootstrap.get("account_uuid", ""),
+            "email": bootstrap.get("email", ""),
+            "full_name": bootstrap.get("full_name", ""),
+            "display_name": bootstrap.get("display_name", ""),
+            "org_name": orgs[0]["name"] if orgs else "",
+            "org_role": orgs[0]["role"] if orgs else "",
         })
         return jsonify({"success": True, "account": {
             "id": acc["id"], "name": acc["name"],
@@ -219,6 +224,11 @@ def api_refresh_account_identity(account_id):
         orgs = bootstrap.get("organizations", [])
         acc["org_id"] = orgs[0]["uuid"] if orgs else acc.get("org_id", "")
         acc["account_uuid"] = bootstrap.get("account_uuid", acc.get("account_uuid", ""))
+        acc["email"] = bootstrap.get("email", acc.get("email", ""))
+        acc["full_name"] = bootstrap.get("full_name", acc.get("full_name", ""))
+        acc["display_name"] = bootstrap.get("display_name", acc.get("display_name", ""))
+        acc["org_name"] = orgs[0]["name"] if orgs else acc.get("org_name", "")
+        acc["org_role"] = orgs[0]["role"] if orgs else acc.get("org_role", "")
         save_account(acc)
         return jsonify({"success": True, "org_id": acc["org_id"]})
     except Exception as e:
@@ -235,7 +245,7 @@ def api_capture_account(account_id):
     if not blob:
         return jsonify({"error": "No Claude Code credentials found in Keychain"}), 404
     acc["credential_blob"] = blob
-    acc["org_id"] = blob.get("organizationUuid", acc.get("org_id", ""))
+    acc["org_id"] = (blob.get("organizationUuid") or (blob.get("claudeAiOauth") or {}).get("organizationUuid") or acc.get("org_id", ""))
     save_account(acc)
     return jsonify({"success": True})
 
@@ -335,11 +345,16 @@ def api_test_source(server_id):
 
 @app.route("/api/sources/<server_id>/sync", methods=["POST"])
 def api_sync_source(server_id):
-    """Start a background sync for a server."""
+    """Start a background sync for a server.
+    Optional body: {"types": ["history"]} to sync only specific data types.
+    Valid types: "history", "sessions", "plans". Omit for all three.
+    """
+    body = request.get_json(silent=True) or {}
+    sync_types = body.get("types") or None  # None → all
     srv = get_server(server_id)
     if not srv:
         return jsonify({"error": "Server not found"}), 404
-    started = aggregators.start_background_sync(server_id, srv)
+    started = aggregators.start_background_sync(server_id, srv, sync_types=sync_types)
     if not started:
         return jsonify({"status": "already_syncing"})
     return jsonify({"status": "started"})
@@ -351,23 +366,71 @@ def api_sync_status():
     return jsonify(aggregators.get_all_sync_jobs())
 
 
-def _match_org_uuid(org_uuid):
+def _find_account_by_org(org_uuid, linked_source=None):
+    """Return the full account dict for the first account matching org_uuid, or None.
+    Prefers accounts that already have a session_key (richer accounts first).
+    Falls back to linked_source match when org_uuid is absent (e.g. personal accounts
+    with no organizationUuid in their credential file).
+    """
+    match = None
+    if org_uuid:
+        for a in list_accounts():
+            full = get_account(a["id"])
+            if not full:
+                continue
+            cred = full.get("credential_blob") or {}
+            blob_org = cred.get("organizationUuid") or (cred.get("claudeAiOauth") or {}).get("organizationUuid", "")
+            if full.get("org_id") == org_uuid or blob_org == org_uuid:
+                if full.get("session_key"):
+                    return full  # Prefer accounts with a session key
+                if match is None:
+                    match = full
+        if match:
+            return match
+
+    # Fallback: match by linked_source (personal accounts have no org UUID)
+    if linked_source:
+        for a in list_accounts():
+            full = get_account(a["id"])
+            if not full:
+                continue
+            if full.get("linked_source") == linked_source:
+                if full.get("session_key"):
+                    return full
+                if match is None:
+                    match = full
+
+    return match
+
+
+def _match_org_uuid(org_uuid, server_id=None):
     """Find a local account matching an org UUID.
-    Checks org_id field AND credential_blob.organizationUuid (accounts added via
-    session_key only may not have org_id populated until usage is fetched).
+    Checks org_id field AND credential_blob.organizationUuid.
+    Falls back to linked_source match when org_uuid is absent.
     Returns dict with matched_account_id and matched_account_name.
     """
-    if not org_uuid:
-        return {"matched_account_id": None, "matched_account_name": None}
     for a in list_accounts():
         full = get_account(a["id"])
         if not full:
             continue
-        if full.get("org_id") == org_uuid:
-            return {"matched_account_id": a["id"], "matched_account_name": a.get("name", "")}
-        blob_org = (full.get("credential_blob") or {}).get("organizationUuid", "")
-        if blob_org and blob_org == org_uuid:
-            return {"matched_account_id": a["id"], "matched_account_name": a.get("name", "")}
+        if org_uuid:
+            if full.get("org_id") == org_uuid:
+                return {"matched_account_id": a["id"], "matched_account_name": a.get("name", "")}
+            cred = full.get("credential_blob") or {}
+            blob_org = cred.get("organizationUuid") or (cred.get("claudeAiOauth") or {}).get("organizationUuid", "")
+            if blob_org and blob_org == org_uuid:
+                return {"matched_account_id": a["id"], "matched_account_name": a.get("name", "")}
+
+    # Fallback: match by linked_source when no org UUID available
+    if server_id:
+        source_key = "local" if server_id == "local" else f"ssh:{server_id}"
+        for a in list_accounts():
+            full = get_account(a["id"])
+            if not full:
+                continue
+            if full.get("linked_source") == source_key and full.get("credential_blob"):
+                return {"matched_account_id": a["id"], "matched_account_name": a.get("name", "")}
+
     return {"matched_account_id": None, "matched_account_name": None}
 
 
@@ -391,7 +454,7 @@ def api_source_info(server_id):
             "has_credentials": bool(org_uuid),
             "org_uuid": org_uuid,
             "model": model,
-            **_match_org_uuid(org_uuid),
+            **_match_org_uuid(org_uuid, server_id="local"),
         })
 
     srv = get_server(server_id)
@@ -402,7 +465,7 @@ def api_source_info(server_id):
 
     return jsonify({
         **info,
-        **_match_org_uuid(info.get("org_uuid", "")),
+        **_match_org_uuid(info.get("org_uuid", ""), server_id=server_id),
     })
 
 
@@ -439,18 +502,19 @@ def api_source_account_capture(server_id):
         blob = get_current_credential_blob()
         if not blob:
             return jsonify({"error": "No credentials found in Keychain"}), 404
-        org_uuid = blob.get("organizationUuid", "")
+        org_uuid = blob.get("organizationUuid") or (blob.get("claudeAiOauth") or {}).get("organizationUuid", "")
         if account_id:
             acc = get_account(account_id)
             if not acc:
                 return jsonify({"error": "Account not found"}), 404
         else:
-            acc = {"name": "Local Account", "session_key": "", "org_id": org_uuid, "account_uuid": ""}
+            # Merge into existing account with same org_id rather than creating a duplicate
+            acc = _find_account_by_org(org_uuid, linked_source="local") or {"name": "Local Account", "session_key": "", "org_id": org_uuid, "account_uuid": ""}
         acc["credential_blob"] = blob
         if org_uuid:
             acc["org_id"] = org_uuid
         saved = save_account(acc)
-        return jsonify({"success": True, "account_id": saved["id"]})
+        return jsonify({"success": True, "account_id": saved["id"], "name": acc.get("name", "Local Account"), "merged": "id" in acc})
 
     srv = get_server(server_id)
     if not srv:
@@ -473,8 +537,15 @@ def api_source_account_capture(server_id):
         save_account(acc)
         return jsonify({"success": True, "account_id": account_id})
 
-    # Import as a new account
+    # Merge into existing account with same org_id, or create a new one
     srv_name = srv.get("name") or srv["host"]
+    existing = _find_account_by_org(org_uuid, linked_source=f"ssh:{server_id}")
+    if existing:
+        existing["credential_blob"] = blob
+        existing["org_id"] = org_uuid or existing.get("org_id", "")
+        saved = save_account(existing)
+        return jsonify({"success": True, "account_id": saved["id"], "name": saved.get("name", ""), "merged": True})
+
     new_acc = save_account({
         "name": f"Account from {srv_name}",
         "session_key": "",

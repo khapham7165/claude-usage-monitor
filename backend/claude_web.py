@@ -50,6 +50,11 @@ def list_accounts():
         result.append({
             "id": acc["id"],
             "name": acc.get("name", ""),
+            "email": acc.get("email", ""),
+            "full_name": acc.get("full_name", ""),
+            "display_name": acc.get("display_name", ""),
+            "org_name": acc.get("org_name", ""),
+            "org_role": acc.get("org_role", ""),
             "maskedKey": (key[:16] + "..." + key[-4:]) if len(key) > 20 else key[:8] + "...",
             "org_id": acc.get("org_id", ""),
             "account_uuid": acc.get("account_uuid", ""),

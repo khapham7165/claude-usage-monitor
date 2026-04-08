@@ -16,6 +16,7 @@
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
+.hidden { display: none !important; }
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
@@ -464,14 +465,17 @@ footer {
 .badge { background: var(--accent); color: #fff; font-size: 0.68rem; padding: 2px 7px; border-radius: 10px; margin-left: 6px; font-weight: 600; }
 
 /* ── List items (accounts, servers) ──────────────────────── */
-.list-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; gap: 8px; }
+.list-item { display: flex; align-items: flex-start; justify-content: space-between; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; gap: 10px; }
 .list-item:hover { border-color: var(--accent); }
 .list-item-info { flex: 1; min-width: 0; }
 .list-item-info .item-name { font-weight: 600; font-size: 0.85rem; }
-.list-item-info .item-detail { font-size: 0.72rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-item-info .item-detail { font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; }
 .list-item-info .item-status { font-size: 0.7rem; margin-top: 2px; }
-.list-item-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; }
+.list-item-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; padding-top: 2px; }
 .list-item-actions .btn { padding: 3px 8px; font-size: 0.72rem; }
+.acc-chip { display: inline-block; font-size: 0.65rem; padding: 1px 6px; border-radius: 10px; font-family: monospace; }
+.acc-chip--ok { background: color-mix(in srgb, var(--accent2) 15%, transparent); color: var(--accent2); }
+.acc-chip--dim { background: color-mix(in srgb, var(--text-muted) 12%, transparent); color: var(--text-muted); }
 
 /* ── Source cards (unified local + SSH) ──────────────────── */
 .source-card { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; overflow: hidden; background: var(--bg); }
@@ -485,8 +489,9 @@ footer {
 .source-ctrl { display: flex; align-items: center; gap: 6px; }
 .source-ctrl-label { font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; }
 .source-ctrl-status { font-size: 0.72rem; min-width: 40px; }
-.source-card-actions { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
+.source-card-actions { display: flex; gap: 4px; align-items: center; margin-left: auto; flex-shrink: 0; flex-wrap: wrap; }
 .source-card-actions .btn { padding: 3px 8px; font-size: 0.72rem; }
+.source-sync-label { font-size: 0.7rem; color: var(--text-muted); white-space: nowrap; margin-right: 2px; }
 .source-import-hint { font-size: 0.72rem; color: var(--warning, #d29922); display: flex; align-items: center; gap: 6px; }
 
 .source-select-sm {

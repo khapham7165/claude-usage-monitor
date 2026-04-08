@@ -72,7 +72,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         applyTab(btn.dataset.tab);
         savePrefs();
-        loadActiveTab();
+        if (btn.dataset.tab === 'settings') loadSettingsData();
+        else loadActiveTab();
     });
 });
 
@@ -322,7 +323,7 @@ async function loadActiveTab() {
     if (currentTab === 'analytics') await loadAnalytics();
     else if (currentTab === 'sessions') await loadSessionsTab();
     else if (currentTab === 'usage') await loadAccountUsage();
-    else if (currentTab === 'settings') await loadSettingsData();
+    // settings tab is excluded from auto-refresh — it reloads only on user actions
 }
 
 // ── Account Usage (left panel) ──────────────────────────────
@@ -443,7 +444,7 @@ async function loadAccountUsage() {
 
 // ── Background Sync ─────────────────────────────────────────
 let syncPollInterval = null;
-const STEP_LABELS = { starting: 'Starting...', connecting: 'Connecting via SSH', discovering: 'Locating ~/.claude/', reading_history: 'Reading history', reading_history_done: 'History loaded', reading_projects: 'Scanning project logs', done: 'Finished' };
+const STEP_LABELS = { starting: 'Starting...', connecting: 'Connecting via SSH', discovering: 'Locating ~/.claude/', reading_history: 'Reading history', reading_history_done: 'History loaded', reading_projects: 'Scanning project logs', reading_plans: 'Reading plans', reading_plans_done: 'Plans loaded', done: 'Finished' };
 
 function startSyncPolling() {
     if (syncPollInterval) return;
@@ -470,8 +471,8 @@ async function pollSyncStatus() {
             stopSyncPolling();
             if (Object.values(jobs).some(j => j.status === 'done' || j.status === 'error')) {
                 refreshSourceDropdown();
-                loadActiveTab();
                 if (currentTab === 'settings') loadSourcesList();
+                else loadActiveTab();
             }
         }
     } catch { syncBar.classList.add('hidden'); stopSyncPolling(); }
@@ -587,7 +588,11 @@ function _buildSourceCard(src, syncJob, accounts) {
     const connHtml = src.conn ? `<span class="source-card-conn">${src.conn}</span>` : '';
     const actionsHtml = src.isLocal ? '' : `
         <div class="source-card-actions">
-            <button class="btn btn-sm btn-ghost" data-sync-src="${src.id}">Sync</button>
+            <span class="source-sync-label">Sync:</span>
+            <button class="btn btn-sm btn-ghost" data-sync-src="${src.id}" data-sync-type="">All</button>
+            <button class="btn btn-sm btn-ghost" data-sync-src="${src.id}" data-sync-type="history">History</button>
+            <button class="btn btn-sm btn-ghost" data-sync-src="${src.id}" data-sync-type="sessions">Sessions</button>
+            <button class="btn btn-sm btn-ghost" data-sync-src="${src.id}" data-sync-type="plans">Plans</button>
             <button class="btn btn-sm btn-ghost" data-test-src="${src.id}">Test</button>
             <button class="btn btn-sm btn-danger" data-remove-src="${src.id}">Remove</button>
         </div>`;
@@ -650,11 +655,9 @@ function _populateAccountSelect(card, sourceId, accounts, info) {
         for (const acc of switchable) {
             const opt = document.createElement('option');
             opt.value = acc.id;
-            opt.textContent = acc.name || acc.id;
-            if (acc.id === info.matched_account_id) {
-                opt.textContent += ' ●';
-                opt.selected = true;
-            }
+            const label = acc.email || acc.display_name || acc.name || acc.id;
+            opt.textContent = acc.id === info.matched_account_id ? label + ' ●' : label;
+            if (acc.id === info.matched_account_id) opt.selected = true;
             sel.appendChild(opt);
         }
         // Capture-from-source option
@@ -664,10 +667,12 @@ function _populateAccountSelect(card, sourceId, accounts, info) {
         sel.appendChild(captureOpt);
     }
 
-    // Show import hint only when: remote has credentials, no match found,
-    // AND the user already has at least one captured account (so they've set up the workflow).
-    // If nobody has captured anything yet, the hint is premature noise.
-    const showImport = info.has_credentials && !info.matched_account_id
+    // Show import hint only when the server has credentials that aren't represented
+    // by any local account — either matched by org UUID (server-side) or by linked_source (client-side).
+    const sourceLink = sourceId === 'local' ? 'local' : `ssh:${sourceId}`;
+    const hasLinkedAccount = accounts.some(a => a.linked_source === sourceLink && a.hasCredential)
+                          || !!info.matched_account_id;
+    const showImport = info.has_credentials && !hasLinkedAccount
                        && sourceId !== 'local' && switchable.length > 0;
     importHint.classList.toggle('hidden', !showImport);
 }
@@ -761,7 +766,7 @@ function _bindSourceCardActions(card, src) {
             });
             const data = await res.json();
             if (data.success) {
-                importBtn.textContent = `Imported as "${data.name}"`;
+                importBtn.textContent = data.merged ? `Credentials added to "${data.name}"` : `Imported as "${data.name}"`;
                 document.getElementById(`import-hint-${src.id}`).classList.add('hidden');
                 loadAccountsList();
                 // Reload card info to reflect new account
@@ -774,20 +779,26 @@ function _bindSourceCardActions(card, src) {
         });
     }
 
-    // SSH-only: Sync, Test, Remove
-    const syncBtn = card.querySelector(`[data-sync-src]`);
-    if (syncBtn) {
-        syncBtn.addEventListener('click', async () => {
-            syncBtn.disabled = true; syncBtn.textContent = 'Starting...';
-            const res = await fetch(`/api/sources/${src.id}/sync`, { method: 'POST' });
+    // SSH-only: Sync (per-type), Test, Remove
+    card.querySelectorAll('[data-sync-src]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const syncType = btn.dataset.syncType;
+            const label = syncType || 'All';
+            btn.disabled = true; btn.textContent = 'Starting...';
+            const body = syncType ? { types: [syncType] } : {};
+            const res = await fetch(`/api/sources/${src.id}/sync`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
             const data = await res.json();
             if (data.status === 'started' || data.status === 'already_syncing') {
-                syncBtn.textContent = 'Syncing...'; startSyncPolling();
+                btn.textContent = 'Syncing...'; startSyncPolling();
             } else {
-                syncBtn.textContent = 'Failed'; setTimeout(() => { syncBtn.textContent = 'Sync'; syncBtn.disabled = false; }, 2000);
+                btn.textContent = 'Failed';
+                setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 2000);
             }
         });
-    }
+    });
 
     const testBtn = card.querySelector(`[data-test-src]`);
     if (testBtn) {
@@ -891,19 +902,32 @@ async function loadAccountsList() {
             `<option value="${o.value}" ${acc.linked_source === o.value ? 'selected' : ''}>${o.label}</option>`
         ).join('');
         const isActive = acc.id === activeId;
+        const identity = acc.full_name || acc.display_name || acc.name || 'Unnamed';
+        const orgParts = [acc.org_name, acc.org_role].filter(Boolean);
+        const credBadge = acc.hasCredential
+            ? '<span class="acc-chip acc-chip--ok">CredBlob ✓</span>'
+            : '<span class="acc-chip acc-chip--dim">No CredBlob</span>';
+        const keyBadge = acc.hasKey
+            ? `<span class="acc-chip acc-chip--ok" title="${acc.maskedKey}">Key ✓</span>`
+            : '<span class="acc-chip acc-chip--dim">No Key</span>';
+        const sourceParts = sourceOptions.find(o => o.value === acc.linked_source);
+        const sourceLabel = sourceParts && sourceParts.value ? sourceParts.label : '';
         el.innerHTML = `<div class="list-item-info">
                 <div class="item-name">
-                    ${acc.name || 'Unnamed'}
+                    ${identity}
                     ${isActive ? '<span class="active-account-badge">● Active</span>' : ''}
                     ${!acc.org_id && acc.hasKey ? '<span class="active-account-badge" style="background:var(--warning,#d29922);color:#fff;" title="org_id not set — click Sync ID to link this account to credential files">⚠ unlinked</span>' : ''}
                 </div>
-                <div class="item-detail"><code>${acc.maskedKey}</code></div>
+                ${acc.email ? `<div class="item-detail">${acc.email}${orgParts.length ? ' · ' + orgParts.join(' · ') : ''}</div>` : orgParts.length ? `<div class="item-detail">${orgParts.join(' · ')}</div>` : ''}
+                <div class="item-status" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:3px;">
+                    ${keyBadge}${credBadge}
+                    ${sourceLabel ? `<span class="acc-chip acc-chip--dim">⇄ ${sourceLabel}</span>` : ''}
+                    ${acc.hasKey ? `<span class="acc-chip acc-chip--dim" title="session key">${acc.maskedKey}</span>` : ''}
+                </div>
             </div>
             <div class="list-item-actions">
                 <select class="source-select-sm" data-link-acc="${acc.id}">${opts}</select>
-                ${!acc.org_id && acc.hasKey ? `<button class="btn btn-sm btn-ghost" data-sync-id="${acc.id}" title="Fetch org identity from claude.ai so this account can be matched to credential files">Sync ID</button>` : ''}
-                <button class="btn btn-sm btn-ghost" data-capture-acc="${acc.id}" title="Save current Claude Code session to this account">${acc.hasCredential ? 'Re-capture' : 'Capture'}</button>
-                ${acc.hasCredential && !isActive ? `<button class="btn btn-sm btn-primary" data-activate-acc="${acc.id}">Switch</button>` : ''}
+                ${!acc.org_id && acc.hasKey ? `<button class="btn btn-sm btn-ghost" data-sync-id="${acc.id}" title="Fetch org identity from claude.ai">Sync ID</button>` : ''}
                 <button class="btn btn-sm btn-danger" data-delete-acc="${acc.id}">Remove</button>
             </div>`;
         container.appendChild(el);
@@ -931,27 +955,6 @@ async function loadAccountsList() {
         });
     });
 
-    // Capture handler
-    container.querySelectorAll('[data-capture-acc]').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            btn.disabled = true; btn.textContent = 'Capturing...';
-            const res = await fetch(`/api/accounts/${btn.dataset.captureAcc}/capture`, { method: 'POST' });
-            const data = await res.json();
-            if (data.success) { btn.textContent = 'Captured!'; setTimeout(() => loadAccountsList(), 1000); }
-            else { btn.textContent = data.error || 'Failed'; btn.style.color = 'var(--danger)'; btn.disabled = false; }
-        });
-    });
-
-    // Activate handler
-    container.querySelectorAll('[data-activate-acc]').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            btn.disabled = true; btn.textContent = 'Switching...';
-            const res = await fetch(`/api/accounts/${btn.dataset.activateAcc}/activate`, { method: 'POST' });
-            const data = await res.json();
-            if (data.success) { loadAccountsList(); loadAccountSelector(); }
-            else { btn.textContent = data.error || 'Failed'; btn.style.color = 'var(--danger)'; btn.disabled = false; }
-        });
-    });
 
     container.querySelectorAll('[data-delete-acc]').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -965,6 +968,11 @@ async function loadAccountsList() {
     });
 }
 
+document.getElementById('toggleAddAccount').addEventListener('click', () => {
+    const form = document.getElementById('addAccountForm');
+    form.classList.toggle('hidden');
+});
+
 document.getElementById('addAccountBtn').addEventListener('click', async () => {
     const name = document.getElementById('newAccountName').value.trim();
     const key = document.getElementById('newAccountKey').value.trim();
@@ -976,58 +984,12 @@ document.getElementById('addAccountBtn').addEventListener('click', async () => {
         const data = await res.json();
         if (data.success) {
             document.getElementById('newAccountName').value = ''; document.getElementById('newAccountKey').value = '';
+            document.getElementById('addAccountForm').classList.add('hidden');
             status.textContent = `Added: ${data.account.display_name || data.account.name}`; status.className = 'key-status success';
             loadAccountsList(); loadAccountUsage();
         } else { status.textContent = data.error || 'Failed'; status.className = 'key-status error'; }
     } catch (e) { status.textContent = 'Error: ' + e.message; status.className = 'key-status error'; }
 });
-
-// ── Servers Management ──────────────────────────────────────
-async function loadServersList() {
-    const [servers, jobs] = await Promise.all([fetchJSON('/api/sources'), fetchJSON('/api/sources/sync-status')]);
-    const container = document.getElementById('serversList');
-    container.innerHTML = '';
-    for (const srv of servers) {
-        const el = document.createElement('div'); el.className = 'list-item';
-        const job = jobs[srv.id];
-        let syncInfo, syncColor;
-        if (job && job.status === 'syncing') {
-            syncInfo = `${STEP_LABELS[job.step] || job.step}${job.step_detail ? ' — ' + job.step_detail : ''} (${job.elapsed_seconds}s)`;
-            syncColor = 'var(--accent)';
-        } else if (job && job.status === 'error') { syncInfo = `Error: ${job.error}`; syncColor = 'var(--danger)'; }
-        else if (srv.synced_at) { syncInfo = `Synced: ${srv.history_count} msgs, ${srv.token_log_count} token logs`; syncColor = 'var(--accent2)'; }
-        else { syncInfo = 'Not synced'; syncColor = 'var(--text-muted)'; }
-        el.innerHTML = `<div class="list-item-info"><div class="item-name">${srv.name || srv.host}</div><div class="item-detail">${srv.user}@${srv.host} (key: ${srv.key_path})</div><div class="item-status" style="color:${syncColor}">${syncInfo}</div></div>
-            <div class="list-item-actions"><button class="btn btn-sm btn-ghost" data-test-srv="${srv.id}">Test</button><button class="btn btn-sm btn-primary" data-sync-srv="${srv.id}">Sync</button><button class="btn btn-sm btn-danger" data-delete-srv="${srv.id}">Remove</button></div>`;
-        container.appendChild(el);
-    }
-    container.querySelectorAll('[data-test-srv]').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            btn.disabled = true; btn.textContent = 'Testing...';
-            const res = await fetch(`/api/sources/${btn.dataset.testSrv}/test`, { method: 'POST' });
-            const data = await res.json();
-            btn.textContent = data.success ? 'OK' : 'Fail'; btn.style.color = data.success ? 'var(--accent2)' : 'var(--danger)';
-            if (!data.success) alert('Connection failed: ' + (data.error || 'Unknown error'));
-            setTimeout(() => { btn.textContent = 'Test'; btn.disabled = false; btn.style.color = ''; }, 3000);
-        });
-    });
-    container.querySelectorAll('[data-sync-srv]').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            btn.disabled = true; btn.textContent = 'Starting...';
-            const res = await fetch(`/api/sources/${btn.dataset.syncSrv}/sync`, { method: 'POST' });
-            const data = await res.json();
-            if (data.status === 'started' || data.status === 'already_syncing') { btn.textContent = 'Syncing...'; startSyncPolling(); }
-            else { btn.textContent = 'Failed'; setTimeout(() => { btn.textContent = 'Sync'; btn.disabled = false; }, 2000); }
-        });
-    });
-    container.querySelectorAll('[data-delete-srv]').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            if (!confirm('Remove this server?')) return;
-            await fetch(`/api/sources/${btn.dataset.deleteSrv}`, { method: 'DELETE' });
-            loadServersList(); refreshSourceDropdown(); loadActiveTab();
-        });
-    });
-}
 
 document.getElementById('toggleAddServer').addEventListener('click', () => {
     const form = document.getElementById('addServerForm');
@@ -1083,5 +1045,5 @@ document.getElementById('globalModelSelect').addEventListener('change', async (e
 // ── Initial load ────────────────────────────────────────────
 loadPrefs();                       // Restore saved state
 refreshSourceDropdown();           // Populate source dropdown
-loadActiveTab();                   // Load data for active tab
+if (currentTab === 'settings') loadSettingsData(); else loadActiveTab();
 setupAutoRefresh();                // Start auto-refresh if enabled

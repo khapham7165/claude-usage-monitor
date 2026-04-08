@@ -108,15 +108,20 @@ def test_connection(server_config):
 
 # ── Data sync (uses exec_command, not per-file SFTP) ─────────
 
-def sync_server(server_config, progress_cb=None, cursor=None):
+def sync_server(server_config, progress_cb=None, cursor=None, sync_types=None):
     """Fetch Claude usage data from a remote server.
 
     cursor: dict loaded via cursor.load_cursor(). Empty dict or None → full sync.
             Non-empty → incremental sync using per-type byte/size/mtime cursors.
-    Returns dict with success, data, and new_cursor (to be saved by caller).
+    sync_types: set/list of 'history', 'sessions', 'plans'. None means all three.
+    Returns dict with success, data, synced_types, and new_cursor (to be saved by caller).
     """
     if cursor is None:
         cursor = {}
+    if sync_types is None:
+        sync_types = {"history", "sessions", "plans"}
+    else:
+        sync_types = set(sync_types)
 
     server_id = server_config["id"]
     source = f"ssh:{server_id}"
@@ -125,6 +130,15 @@ def sync_server(server_config, progress_cb=None, cursor=None):
     def _progress(step, detail=""):
         if progress_cb:
             progress_cb(step, detail)
+
+    # Preserve cursors for unsynced types so they aren't reset
+    new_msg_cursor  = cursor.get("messages", {})
+    new_sess_cursor = cursor.get("sessions", {})
+    new_plan_cursor = cursor.get("plans", {})
+
+    history, history_is_full = [], False
+    token_logs, session_plans, session_tasks = [], [], {}
+    plans = []
 
     client = None
     try:
@@ -144,28 +158,27 @@ def sync_server(server_config, progress_cb=None, cursor=None):
         }
         active_model = _raw_info.get("model", "claude-sonnet-4-6")
 
-        msg_cursor = cursor.get("messages", {})
-        sess_cursor = cursor.get("sessions", {})
-        plan_cursor = cursor.get("plans", {})
+        if "history" in sync_types:
+            msg_cursor = cursor.get("messages", {})
+            mode = "incremental" if msg_cursor else "full"
+            _progress("reading_history", f"Reading history.jsonl ({mode})")
+            history, new_msg_cursor, history_is_full = _sync_messages(
+                client, claude_dir, source, msg_cursor
+            )
+            _progress("reading_history_done", f"{len(history)} messages")
 
-        # Sync messages (history.jsonl)
-        mode = "incremental" if msg_cursor else "full"
-        _progress("reading_history", f"Reading history.jsonl ({mode})")
-        history, new_msg_cursor, history_is_full = _sync_messages(
-            client, claude_dir, source, msg_cursor
-        )
-        _progress("reading_history_done", f"{len(history)} messages")
+        if "sessions" in sync_types:
+            sess_cursor = cursor.get("sessions", {})
+            token_logs, session_plans, session_tasks, new_sess_cursor = _sync_sessions(
+                client, claude_dir, source, sess_cursor, _progress
+            )
 
-        # Sync sessions (projects/**/*.jsonl)
-        token_logs, session_plans, session_tasks, new_sess_cursor = _sync_sessions(
-            client, claude_dir, source, sess_cursor, _progress
-        )
-
-        # Sync plans (plans/*.md)
-        mode = "incremental" if plan_cursor else "full"
-        _progress("reading_plans", f"Reading plan files ({mode})")
-        plans, new_plan_cursor = _sync_plans(client, claude_dir, source, plan_cursor)
-        _progress("reading_plans_done", f"{len(plans)} plans")
+        if "plans" in sync_types:
+            plan_cursor = cursor.get("plans", {})
+            mode = "incremental" if plan_cursor else "full"
+            _progress("reading_plans", f"Reading plan files ({mode})")
+            plans, new_plan_cursor = _sync_plans(client, claude_dir, source, plan_cursor)
+            _progress("reading_plans_done", f"{len(plans)} plans")
 
         _progress("done", f"{len(history)} msgs, {len(token_logs)} token logs, {len(plans)} plans")
 
@@ -173,6 +186,7 @@ def sync_server(server_config, progress_cb=None, cursor=None):
             "success": True,
             "server_id": server_id,
             "incremental": incremental,
+            "synced_types": list(sync_types),
             "history_is_full": history_is_full,
             "history": history,
             "token_logs": token_logs,
@@ -583,6 +597,20 @@ def _read_remote_plans(client, claude_dir, source):
 
 # ── Account & model helpers ──────────────────────────────────
 
+def _extract_org_uuid(blob):
+    """Extract organizationUuid from a credential blob.
+    Handles both top-level (Keychain format) and nested under claudeAiOauth
+    (file-based format used by Claude Code on Linux).
+    """
+    if not blob:
+        return ""
+    return (
+        blob.get("organizationUuid")
+        or blob.get("claudeAiOauth", {}).get("organizationUuid")
+        or ""
+    )
+
+
 def _read_account_and_model(client, home):
     """Read credential info and model setting from an open SSH connection.
 
@@ -618,7 +646,7 @@ def _read_account_and_model(client, home):
     return {
         "has_credentials": blob is not None,
         "cred_path": cred_path,
-        "org_uuid": blob.get("organizationUuid", "") if blob else "",
+        "org_uuid": _extract_org_uuid(blob),
         "credential_blob": blob,
         "model": model,
     }

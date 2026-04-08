@@ -23,21 +23,56 @@ def generate_id(prefix="id"):
     return f"{prefix}-{uuid4().hex[:8]}"
 
 
-def get_oauth_token_from_keychain():
-    """Read Claude Code OAuth token from macOS Keychain."""
+_KC_SERVICE = "Claude Code-credentials"
+_KC_ACCOUNT = "Claude Key"
+
+
+def _read_keychain_blob():
+    """Read the full Claude Code-credentials JSON blob from Keychain."""
     try:
         result = subprocess.run(
-            ["security", "find-generic-password",
-             "-s", "Claude Code-credentials", "-w"],
+            ["security", "find-generic-password", "-s", _KC_SERVICE, "-w"],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0:
             return None
-        creds = json.loads(result.stdout.strip())
-        oauth = creds.get("claudeAiOauth", {})
-        return oauth.get("accessToken")
+        return json.loads(result.stdout.strip())
     except Exception:
         return None
+
+
+def get_oauth_token_from_keychain():
+    """Read Claude Code OAuth token from macOS Keychain."""
+    blob = _read_keychain_blob()
+    if not blob:
+        return None
+    return blob.get("claudeAiOauth", {}).get("accessToken")
+
+
+def get_current_credential_blob():
+    """Return the full credential blob currently active in Keychain."""
+    return _read_keychain_blob()
+
+
+def get_active_org_uuid():
+    """Return the organizationUuid from the current Keychain credentials."""
+    blob = _read_keychain_blob()
+    return blob.get("organizationUuid") if blob else None
+
+
+def apply_credential_blob(blob):
+    """Write a credential blob to the Claude Code-credentials Keychain entry.
+    Uses -U to update if the entry already exists."""
+    try:
+        blob_json = json.dumps(blob)
+        result = subprocess.run(
+            ["security", "add-generic-password",
+             "-U", "-s", _KC_SERVICE, "-a", _KC_ACCOUNT, "-w", blob_json],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def get_api_key():

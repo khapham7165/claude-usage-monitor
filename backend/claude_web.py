@@ -55,6 +55,7 @@ def list_accounts():
             "account_uuid": acc.get("account_uuid", ""),
             "hasKey": bool(key),
             "linked_source": acc.get("linked_source", ""),
+            "hasCredential": bool(acc.get("credential_blob")),
         })
     return result
 

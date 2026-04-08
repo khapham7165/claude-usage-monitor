@@ -127,8 +127,16 @@
                             <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
                         </select>
                         <span id="modelSaveStatus" class="model-save-status"></span>
-                        <span class="model-switcher-hint">applies to new sessions</span>
                     </div>
+                    <div class="toolbar-divider"></div>
+                    <div class="model-switcher">
+                        <span class="model-switcher-label">Account:</span>
+                        <select id="globalAccountSelect" class="model-select">
+                            <option value="">— no accounts —</option>
+                        </select>
+                        <span id="accountSwitchStatus" class="model-save-status"></span>
+                    </div>
+                    <span class="model-switcher-hint">applies to new sessions</span>
                 </div>
 
                 <div id="activeSessionsCard" class="card full-width hidden">

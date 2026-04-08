@@ -314,7 +314,7 @@ document.getElementById('planModal').addEventListener('click', e => { if (e.targ
 document.getElementById('tasksModal').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden'); });
 
 async function loadSessionsTab() {
-    await Promise.all([loadOverview(), loadSessions(), loadModelSetting(), loadPlans()]);
+    await Promise.all([loadOverview(), loadSessions(), loadModelSetting(), loadPlans(), loadAccountSelector()]);
     renderActiveSessions(_lastActiveSessions);
 }
 
@@ -532,11 +532,61 @@ async function loadSettingsData() {
     await Promise.all([loadAccountsList(), loadServersList()]);
 }
 
+// ── Account switcher (Sessions toolbar) ─────────────────────
+async function loadAccountSelector() {
+    const [accounts, activeData] = await Promise.all([
+        fetchJSON('/api/accounts'),
+        fetchJSON('/api/accounts/active'),
+    ]);
+    const sel = document.getElementById('globalAccountSelect');
+    const activeId = activeData.activeAccountId;
+    sel.innerHTML = '';
+    const switchable = accounts.filter(a => a.hasCredential);
+    if (!switchable.length) {
+        sel.innerHTML = '<option value="">— capture credentials first —</option>';
+        sel.disabled = true;
+        return;
+    }
+    sel.disabled = false;
+    for (const acc of switchable) {
+        const opt = document.createElement('option');
+        opt.value = acc.id;
+        opt.textContent = acc.name || acc.id;
+        if (acc.id === activeId) opt.textContent += ' ●';
+        sel.appendChild(opt);
+    }
+    if (activeId) sel.value = activeId;
+}
+
+document.getElementById('globalAccountSelect').addEventListener('change', async (e) => {
+    const id = e.target.value;
+    if (!id) return;
+    const status = document.getElementById('accountSwitchStatus');
+    status.textContent = 'Switching...';
+    status.style.color = 'var(--text-muted)';
+    const res = await fetch(`/api/accounts/${id}/activate`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+        status.textContent = 'Switched';
+        status.style.color = 'var(--accent2)';
+        loadAccountSelector();
+    } else {
+        status.textContent = data.error || 'Failed';
+        status.style.color = 'var(--danger)';
+    }
+    setTimeout(() => { status.textContent = ''; }, 3000);
+});
+
 // ── Accounts Management ─────────────────────────────────────
 async function loadAccountsList() {
-    const [accounts, servers] = await Promise.all([fetchJSON('/api/accounts'), fetchJSON('/api/sources')]);
+    const [accounts, servers, activeData] = await Promise.all([
+        fetchJSON('/api/accounts'),
+        fetchJSON('/api/sources'),
+        fetchJSON('/api/accounts/active'),
+    ]);
     const container = document.getElementById('accountsList');
     container.innerHTML = '';
+    const activeId = activeData.activeAccountId;
 
     // Build source options for the dropdown
     const sourceOptions = [
@@ -551,12 +601,18 @@ async function loadAccountsList() {
         const opts = sourceOptions.map(o =>
             `<option value="${o.value}" ${acc.linked_source === o.value ? 'selected' : ''}>${o.label}</option>`
         ).join('');
+        const isActive = acc.id === activeId;
         el.innerHTML = `<div class="list-item-info">
-                <div class="item-name">${acc.name || 'Unnamed'}</div>
+                <div class="item-name">
+                    ${acc.name || 'Unnamed'}
+                    ${isActive ? '<span class="active-account-badge">● Active</span>' : ''}
+                </div>
                 <div class="item-detail"><code>${acc.maskedKey}</code></div>
             </div>
             <div class="list-item-actions">
                 <select class="source-select-sm" data-link-acc="${acc.id}">${opts}</select>
+                <button class="btn btn-sm btn-ghost" data-capture-acc="${acc.id}" title="Save current Claude Code session to this account">${acc.hasCredential ? 'Re-capture' : 'Capture'}</button>
+                ${acc.hasCredential && !isActive ? `<button class="btn btn-sm btn-primary" data-activate-acc="${acc.id}">Switch</button>` : ''}
                 <button class="btn btn-sm btn-danger" data-delete-acc="${acc.id}">Remove</button>
             </div>`;
         container.appendChild(el);
@@ -570,6 +626,28 @@ async function loadAccountsList() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ linked_source: sel.value }),
             });
+        });
+    });
+
+    // Capture handler
+    container.querySelectorAll('[data-capture-acc]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            btn.disabled = true; btn.textContent = 'Capturing...';
+            const res = await fetch(`/api/accounts/${btn.dataset.captureAcc}/capture`, { method: 'POST' });
+            const data = await res.json();
+            if (data.success) { btn.textContent = 'Captured!'; setTimeout(() => loadAccountsList(), 1000); }
+            else { btn.textContent = data.error || 'Failed'; btn.style.color = 'var(--danger)'; btn.disabled = false; }
+        });
+    });
+
+    // Activate handler
+    container.querySelectorAll('[data-activate-acc]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            btn.disabled = true; btn.textContent = 'Switching...';
+            const res = await fetch(`/api/accounts/${btn.dataset.activateAcc}/activate`, { method: 'POST' });
+            const data = await res.json();
+            if (data.success) { loadAccountsList(); loadAccountSelector(); }
+            else { btn.textContent = data.error || 'Failed'; btn.style.color = 'var(--danger)'; btn.disabled = false; }
         });
     });
 

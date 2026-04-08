@@ -609,6 +609,20 @@ footer {
     font-style: italic;
 }
 
+.toolbar-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--border);
+    margin: 0 4px;
+}
+
+.active-account-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--accent2);
+    margin-left: 6px;
+}
+
 /* ── Pagination ──────────────────────────────────────────── */
 .pagination {
     display: flex;

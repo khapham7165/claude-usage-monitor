@@ -188,6 +188,44 @@ def api_create_account():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/accounts/active")
+def api_active_account():
+    from backend.auth import get_active_org_uuid
+    org_uuid = get_active_org_uuid()
+    accounts = list_accounts()
+    active_id = next((a["id"] for a in accounts if a.get("org_id") == org_uuid), None)
+    return jsonify({"activeAccountId": active_id, "orgUuid": org_uuid})
+
+
+@app.route("/api/accounts/<account_id>/capture", methods=["POST"])
+def api_capture_account(account_id):
+    from backend.auth import get_current_credential_blob
+    acc = get_account(account_id)
+    if not acc:
+        return jsonify({"error": "Account not found"}), 404
+    blob = get_current_credential_blob()
+    if not blob:
+        return jsonify({"error": "No Claude Code credentials found in Keychain"}), 404
+    acc["credential_blob"] = blob
+    acc["org_id"] = blob.get("organizationUuid", acc.get("org_id", ""))
+    save_account(acc)
+    return jsonify({"success": True})
+
+
+@app.route("/api/accounts/<account_id>/activate", methods=["POST"])
+def api_activate_account(account_id):
+    from backend.auth import apply_credential_blob
+    acc = get_account(account_id)
+    if not acc:
+        return jsonify({"error": "Account not found"}), 404
+    blob = acc.get("credential_blob")
+    if not blob:
+        return jsonify({"error": "No captured credentials — use Capture first"}), 400
+    if not apply_credential_blob(blob):
+        return jsonify({"error": "Failed to write credentials to Keychain"}), 500
+    return jsonify({"success": True})
+
+
 @app.route("/api/accounts/<account_id>", methods=["PUT"])
 def api_update_account(account_id):
     acc = get_account(account_id)

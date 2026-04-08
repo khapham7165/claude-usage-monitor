@@ -471,7 +471,7 @@ async function pollSyncStatus() {
             if (Object.values(jobs).some(j => j.status === 'done' || j.status === 'error')) {
                 refreshSourceDropdown();
                 loadActiveTab();
-                if (currentTab === 'settings') loadServersList();
+                if (currentTab === 'settings') loadSourcesList();
             }
         }
     } catch { syncBar.classList.add('hidden'); stopSyncPolling(); }
@@ -529,7 +529,296 @@ document.getElementById('autoRefresh').addEventListener('change', () => {
 
 // ── Settings Data ───────────────────────────────────────────
 async function loadSettingsData() {
-    await Promise.all([loadAccountsList(), loadServersList()]);
+    await Promise.all([loadSourcesList(), loadAccountsList()]);
+}
+
+// ── Sources (unified local + SSH) ───────────────────────────
+const _MODELS = [
+    { id: 'claude-sonnet-4-6', name: 'Sonnet 4.6' },
+    { id: 'claude-opus-4-6',   name: 'Opus 4.6' },
+    { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5' },
+];
+
+async function loadSourcesList() {
+    const [servers, syncJobs, accounts] = await Promise.all([
+        fetchJSON('/api/sources'),
+        fetchJSON('/api/sources/sync-status'),
+        fetchJSON('/api/accounts'),
+    ]);
+    const container = document.getElementById('sourcesList');
+    container.innerHTML = '';
+
+    // Build source list: local first, then SSH servers
+    const sources = [
+        { id: 'local', name: 'Local Machine', isLocal: true },
+        ...servers.map(s => ({ id: s.id, name: s.name || s.host, conn: `${s.user}@${s.host}`, isLocal: false, srv: s })),
+    ];
+
+    for (const src of sources) {
+        const card = _buildSourceCard(src, syncJobs[src.id], accounts);
+        container.appendChild(card);
+        // Fire live read for this source (fills in account + model dropdowns)
+        _loadSourceInfo(src.id, card, accounts);
+    }
+}
+
+function _buildSourceCard(src, syncJob, accounts) {
+    const card = document.createElement('div');
+    card.className = 'source-card';
+    card.dataset.sourceId = src.id;
+
+    // Status text for SSH
+    let statusHtml = '';
+    if (!src.isLocal) {
+        const job = syncJob;
+        if (job && job.status === 'syncing') {
+            statusHtml = `<span style="color:var(--accent)">${STEP_LABELS[job.step] || 'Syncing...'}</span>`;
+        } else if (job && job.status === 'error') {
+            statusHtml = `<span style="color:var(--danger)">Error</span>`;
+        } else if (src.srv && src.srv.synced_at) {
+            const ago = _timeAgo(src.srv.synced_at);
+            statusHtml = `<span>Synced ${ago}</span>`;
+        } else {
+            statusHtml = `<span style="color:var(--text-muted)">Not synced</span>`;
+        }
+    }
+
+    const icon = src.isLocal ? '💻' : '🖥';
+    const connHtml = src.conn ? `<span class="source-card-conn">${src.conn}</span>` : '';
+    const actionsHtml = src.isLocal ? '' : `
+        <div class="source-card-actions">
+            <button class="btn btn-sm btn-ghost" data-sync-src="${src.id}">Sync</button>
+            <button class="btn btn-sm btn-ghost" data-test-src="${src.id}">Test</button>
+            <button class="btn btn-sm btn-danger" data-remove-src="${src.id}">Remove</button>
+        </div>`;
+
+    card.innerHTML = `
+        <div class="source-card-header">
+            <span class="source-card-icon">${icon}</span>
+            <span class="source-card-name">${src.name}</span>
+            ${connHtml}
+            <span class="source-card-status">${statusHtml}</span>
+        </div>
+        <div class="source-card-body">
+            <div class="source-ctrl">
+                <span class="source-ctrl-label">Account</span>
+                <select class="model-select source-account-sel" disabled>
+                    <option>Loading...</option>
+                </select>
+                <span class="source-ctrl-status" id="acc-status-${src.id}"></span>
+            </div>
+            <div class="source-ctrl">
+                <span class="source-ctrl-label">Model</span>
+                <select class="model-select source-model-sel" disabled>
+                    <option>Loading...</option>
+                </select>
+                <span class="source-ctrl-status" id="model-status-${src.id}"></span>
+            </div>
+            ${actionsHtml}
+        </div>
+        <div id="import-hint-${src.id}" class="source-import-hint hidden" style="padding: 0 12px 8px;">
+            ⚠ Account on this server isn't in your list —
+            <button class="btn btn-sm btn-ghost" data-import-src="${src.id}">Import</button>
+        </div>`;
+
+    _bindSourceCardActions(card, src);
+    return card;
+}
+
+async function _loadSourceInfo(sourceId, card, accounts) {
+    try {
+        const info = await fetchJSON(`/api/sources/${sourceId}/info`);
+        _populateAccountSelect(card, sourceId, accounts, info);
+        _populateModelSelect(card, sourceId, info.model || 'claude-sonnet-4-6');
+    } catch {
+        _setSourceSelError(card, 'Failed to read');
+    }
+}
+
+function _populateAccountSelect(card, sourceId, accounts, info) {
+    const sel = card.querySelector('.source-account-sel');
+    const importHint = document.getElementById(`import-hint-${sourceId}`);
+    const switchable = accounts.filter(a => a.hasCredential);
+
+    sel.innerHTML = '';
+    sel.disabled = false;
+
+    if (!switchable.length) {
+        sel.innerHTML = '<option value="">— capture credentials first —</option>';
+        sel.disabled = true;
+    } else {
+        for (const acc of switchable) {
+            const opt = document.createElement('option');
+            opt.value = acc.id;
+            opt.textContent = acc.name || acc.id;
+            if (acc.id === info.matched_account_id) {
+                opt.textContent += ' ●';
+                opt.selected = true;
+            }
+            sel.appendChild(opt);
+        }
+        // Capture-from-source option
+        const captureOpt = document.createElement('option');
+        captureOpt.value = '__capture__';
+        captureOpt.textContent = '— Capture from this source —';
+        sel.appendChild(captureOpt);
+    }
+
+    // Show import hint if remote has unmatched account
+    if (info.has_credentials && !info.matched_account_id && sourceId !== 'local') {
+        importHint.classList.remove('hidden');
+    } else {
+        importHint.classList.add('hidden');
+    }
+}
+
+function _populateModelSelect(card, sourceId, currentModel) {
+    const sel = card.querySelector('.source-model-sel');
+    sel.innerHTML = '';
+    sel.disabled = false;
+    for (const m of _MODELS) {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.name;
+        if (m.id === currentModel) opt.selected = true;
+        sel.appendChild(opt);
+    }
+}
+
+function _setSourceSelError(card, msg) {
+    card.querySelectorAll('.source-account-sel, .source-model-sel').forEach(sel => {
+        sel.innerHTML = `<option>${msg}</option>`;
+    });
+}
+
+function _bindSourceCardActions(card, src) {
+    // Account switch
+    card.querySelector('.source-account-sel').addEventListener('change', async (e) => {
+        const val = e.target.value;
+        const status = document.getElementById(`acc-status-${src.id}`);
+        if (val === '__capture__') {
+            e.target.value = '';  // Reset
+            status.textContent = 'Capturing...'; status.style.color = 'var(--text-muted)';
+            const res = await fetch(`/api/sources/${src.id}/account/capture`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}) });
+            const data = await res.json();
+            if (data.success) {
+                status.textContent = 'Captured!'; status.style.color = 'var(--accent2)';
+                loadSourcesList(); loadAccountsList();
+            } else {
+                status.textContent = data.error || 'Failed'; status.style.color = 'var(--danger)';
+            }
+            setTimeout(() => { status.textContent = ''; }, 3000);
+            return;
+        }
+        if (!val) return;
+        status.textContent = 'Switching...'; status.style.color = 'var(--text-muted)';
+        const res = await fetch(`/api/sources/${src.id}/account/activate`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ account_id: val }),
+        });
+        const data = await res.json();
+        if (data.success) {
+            status.textContent = 'Done'; status.style.color = 'var(--accent2)';
+            // Reload info to update ● marker
+            const [accounts, info] = await Promise.all([fetchJSON('/api/accounts'), fetchJSON(`/api/sources/${src.id}/info`)]);
+            _populateAccountSelect(card, src.id, accounts, info);
+            if (src.isLocal) loadAccountSelector();
+        } else {
+            status.textContent = data.error || 'Failed'; status.style.color = 'var(--danger)';
+        }
+        setTimeout(() => { status.textContent = ''; }, 3000);
+    });
+
+    // Model change
+    card.querySelector('.source-model-sel').addEventListener('change', async (e) => {
+        const status = document.getElementById(`model-status-${src.id}`);
+        status.textContent = 'Saving...'; status.style.color = 'var(--text-muted)';
+        const res = await fetch(`/api/sources/${src.id}/model`, {
+            method: 'PUT', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ model: e.target.value }),
+        });
+        const data = await res.json();
+        if (data.success) {
+            status.textContent = 'Saved'; status.style.color = 'var(--accent2)';
+            // Keep Sessions toolbar in sync for local
+            if (src.isLocal) {
+                const globalSel = document.getElementById('globalModelSelect');
+                if (globalSel) globalSel.value = e.target.value;
+            }
+        } else {
+            status.textContent = data.error || 'Failed'; status.style.color = 'var(--danger)';
+        }
+        setTimeout(() => { status.textContent = ''; }, 2000);
+    });
+
+    // Import discovered account
+    const importBtn = card.querySelector(`[data-import-src]`);
+    if (importBtn) {
+        importBtn.addEventListener('click', async () => {
+            importBtn.disabled = true; importBtn.textContent = 'Importing...';
+            const res = await fetch(`/api/sources/${src.id}/account/capture`, {
+                method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}),
+            });
+            const data = await res.json();
+            if (data.success) {
+                importBtn.textContent = `Imported as "${data.name}"`;
+                document.getElementById(`import-hint-${src.id}`).classList.add('hidden');
+                loadAccountsList();
+                // Reload card info to reflect new account
+                const [accounts, info] = await Promise.all([fetchJSON('/api/accounts'), fetchJSON(`/api/sources/${src.id}/info`)]);
+                _populateAccountSelect(card, src.id, accounts, info);
+            } else {
+                importBtn.textContent = data.error || 'Failed';
+                importBtn.style.color = 'var(--danger)';
+            }
+        });
+    }
+
+    // SSH-only: Sync, Test, Remove
+    const syncBtn = card.querySelector(`[data-sync-src]`);
+    if (syncBtn) {
+        syncBtn.addEventListener('click', async () => {
+            syncBtn.disabled = true; syncBtn.textContent = 'Starting...';
+            const res = await fetch(`/api/sources/${src.id}/sync`, { method: 'POST' });
+            const data = await res.json();
+            if (data.status === 'started' || data.status === 'already_syncing') {
+                syncBtn.textContent = 'Syncing...'; startSyncPolling();
+            } else {
+                syncBtn.textContent = 'Failed'; setTimeout(() => { syncBtn.textContent = 'Sync'; syncBtn.disabled = false; }, 2000);
+            }
+        });
+    }
+
+    const testBtn = card.querySelector(`[data-test-src]`);
+    if (testBtn) {
+        testBtn.addEventListener('click', async () => {
+            testBtn.disabled = true; testBtn.textContent = 'Testing...';
+            const res = await fetch(`/api/sources/${src.id}/test`, { method: 'POST' });
+            const data = await res.json();
+            testBtn.textContent = data.success ? 'OK ✓' : 'Failed';
+            testBtn.style.color = data.success ? 'var(--accent2)' : 'var(--danger)';
+            if (!data.success) alert('Connection failed: ' + (data.error || 'Unknown error'));
+            setTimeout(() => { testBtn.textContent = 'Test'; testBtn.disabled = false; testBtn.style.color = ''; }, 3000);
+        });
+    }
+
+    const removeBtn = card.querySelector(`[data-remove-src]`);
+    if (removeBtn) {
+        removeBtn.addEventListener('click', async () => {
+            if (!confirm(`Remove server "${src.name}"?`)) return;
+            await fetch(`/api/sources/${src.id}`, { method: 'DELETE' });
+            card.remove();
+            refreshSourceDropdown(); loadActiveTab();
+        });
+    }
+}
+
+function _timeAgo(isoString) {
+    const diff = Math.floor((Date.now() - new Date(isoString)) / 1000);
+    if (diff < 60) return `${diff}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
 }
 
 // ── Account switcher (Sessions toolbar) ─────────────────────
@@ -727,6 +1016,11 @@ async function loadServersList() {
     });
 }
 
+document.getElementById('toggleAddServer').addEventListener('click', () => {
+    const form = document.getElementById('addServerForm');
+    form.classList.toggle('hidden');
+});
+
 document.getElementById('addServerBtn').addEventListener('click', async () => {
     const name = document.getElementById('newServerName').value.trim();
     const host = document.getElementById('newServerHost').value.trim();
@@ -740,7 +1034,8 @@ document.getElementById('addServerBtn').addEventListener('click', async () => {
     if (data.success) {
         ['newServerName', 'newServerHost', 'newServerUser', 'newServerKey'].forEach(id => document.getElementById(id).value = '');
         status.textContent = 'Server added'; status.className = 'key-status success';
-        loadServersList(); refreshSourceDropdown();
+        document.getElementById('addServerForm').classList.add('hidden');
+        loadSourcesList(); refreshSourceDropdown();
     } else { status.textContent = data.error || 'Failed'; status.className = 'key-status error'; }
 });
 

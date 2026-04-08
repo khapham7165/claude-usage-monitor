@@ -473,6 +473,22 @@ footer {
 .list-item-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; }
 .list-item-actions .btn { padding: 3px 8px; font-size: 0.72rem; }
 
+/* ── Source cards (unified local + SSH) ──────────────────── */
+.source-card { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; overflow: hidden; background: var(--bg); }
+.source-card:hover { border-color: var(--accent); }
+.source-card-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--bg-card); }
+.source-card-icon { font-size: 1rem; }
+.source-card-name { font-weight: 600; font-size: 0.88rem; flex: 1; }
+.source-card-conn { font-size: 0.72rem; color: var(--text-muted); }
+.source-card-status { font-size: 0.7rem; color: var(--text-muted); margin-left: auto; }
+.source-card-body { padding: 8px 12px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.source-ctrl { display: flex; align-items: center; gap: 6px; }
+.source-ctrl-label { font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; }
+.source-ctrl-status { font-size: 0.72rem; min-width: 40px; }
+.source-card-actions { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
+.source-card-actions .btn { padding: 3px 8px; font-size: 0.72rem; }
+.source-import-hint { font-size: 0.72rem; color: var(--warning, #d29922); display: flex; align-items: center; gap: 6px; }
+
 .source-select-sm {
     background: var(--bg);
     border: 1px solid var(--border);

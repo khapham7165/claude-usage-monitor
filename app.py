@@ -17,6 +17,8 @@ from backend.claude_web import (
 from backend.ssh_collector import (
     list_servers, get_server, save_server, delete_server,
     test_connection, sync_server,
+    get_remote_source_info, capture_remote_credentials,
+    write_remote_credentials, write_remote_model,
 )
 
 app = Flask(__name__)
@@ -321,6 +323,181 @@ def api_sync_source(server_id):
 def api_sync_status():
     """Poll endpoint for background sync progress."""
     return jsonify(aggregators.get_all_sync_jobs())
+
+
+@app.route("/api/sources/<server_id>/info", methods=["GET"])
+def api_source_info(server_id):
+    """Live read of active account + model for a source.
+    For local: reads Keychain + settings.json.
+    For SSH: opens SSH connection (may be slow — ~1-2s).
+    """
+    if server_id == "local":
+        from backend.auth import get_active_org_uuid
+        org_uuid = get_active_org_uuid() or ""
+        accounts = list_accounts()
+        matched = next((a for a in accounts if a.get("org_id") == org_uuid), None)
+        model = "claude-sonnet-4-6"
+        if _CLAUDE_SETTINGS.exists():
+            try:
+                with open(_CLAUDE_SETTINGS) as f:
+                    model = json.load(f).get("model", model)
+            except Exception:
+                pass
+        return jsonify({
+            "has_credentials": bool(org_uuid),
+            "org_uuid": org_uuid,
+            "model": model,
+            "matched_account_id": matched["id"] if matched else None,
+            "matched_account_name": matched["name"] if matched else None,
+        })
+
+    srv = get_server(server_id)
+    if not srv:
+        return jsonify({"error": "Server not found"}), 404
+
+    info = get_remote_source_info(srv)
+
+    # Match org_uuid against local accounts
+    matched = None
+    if info.get("org_uuid"):
+        for a in list_accounts():
+            full = get_account(a["id"])
+            if full and full.get("org_id") == info["org_uuid"]:
+                matched = a
+                break
+
+    return jsonify({
+        **info,
+        "matched_account_id": matched["id"] if matched else None,
+        "matched_account_name": matched["name"] if matched else None,
+    })
+
+
+@app.route("/api/sources/<server_id>/account/activate", methods=["POST"])
+def api_source_account_activate(server_id):
+    """Push an account's credential blob to a source."""
+    data = request.get_json() or {}
+    account_id = data.get("account_id")
+    acc = get_account(account_id)
+    if not acc:
+        return jsonify({"error": "Account not found"}), 404
+    blob = acc.get("credential_blob")
+    if not blob:
+        return jsonify({"error": "No captured credentials — use Capture first"}), 400
+
+    if server_id == "local":
+        from backend.auth import apply_credential_blob
+        return jsonify({"success": apply_credential_blob(blob)})
+
+    srv = get_server(server_id)
+    if not srv:
+        return jsonify({"error": "Server not found"}), 404
+    return jsonify(write_remote_credentials(srv, blob))
+
+
+@app.route("/api/sources/<server_id>/account/capture", methods=["POST"])
+def api_source_account_capture(server_id):
+    """Capture credentials from a source into a local account (create or update)."""
+    data = request.get_json() or {}
+    account_id = data.get("account_id")  # None → create new account
+
+    if server_id == "local":
+        from backend.auth import get_current_credential_blob
+        blob = get_current_credential_blob()
+        if not blob:
+            return jsonify({"error": "No credentials found in Keychain"}), 404
+        org_uuid = blob.get("organizationUuid", "")
+        if account_id:
+            acc = get_account(account_id)
+            if not acc:
+                return jsonify({"error": "Account not found"}), 404
+        else:
+            acc = {"name": "Local Account", "session_key": "", "org_id": org_uuid, "account_uuid": ""}
+        acc["credential_blob"] = blob
+        if org_uuid:
+            acc["org_id"] = org_uuid
+        saved = save_account(acc)
+        return jsonify({"success": True, "account_id": saved["id"]})
+
+    srv = get_server(server_id)
+    if not srv:
+        return jsonify({"error": "Server not found"}), 404
+
+    result = capture_remote_credentials(srv)
+    if "error" in result:
+        return jsonify(result), 404
+
+    blob = result["blob"]
+    org_uuid = result["org_uuid"]
+
+    if account_id:
+        acc = get_account(account_id)
+        if not acc:
+            return jsonify({"error": "Account not found"}), 404
+        acc["credential_blob"] = blob
+        if org_uuid:
+            acc["org_id"] = org_uuid
+        save_account(acc)
+        return jsonify({"success": True, "account_id": account_id})
+
+    # Import as a new account
+    srv_name = srv.get("name") or srv["host"]
+    new_acc = save_account({
+        "name": f"Account from {srv_name}",
+        "session_key": "",
+        "org_id": org_uuid,
+        "account_uuid": "",
+        "credential_blob": blob,
+        "linked_source": f"ssh:{server_id}",
+    })
+    return jsonify({
+        "success": True,
+        "account_id": new_acc["id"],
+        "imported": True,
+        "name": new_acc["name"],
+    })
+
+
+@app.route("/api/sources/<server_id>/model", methods=["GET"])
+def api_get_source_model(server_id):
+    if server_id == "local":
+        model = "claude-sonnet-4-6"
+        if _CLAUDE_SETTINGS.exists():
+            try:
+                with open(_CLAUDE_SETTINGS) as f:
+                    model = json.load(f).get("model", model)
+            except Exception:
+                pass
+        return jsonify({"model": model})
+    srv = get_server(server_id)
+    if not srv:
+        return jsonify({"error": "Server not found"}), 404
+    info = get_remote_source_info(srv)
+    return jsonify({"model": info.get("model", "claude-sonnet-4-6"), "error": info.get("error")})
+
+
+@app.route("/api/sources/<server_id>/model", methods=["PUT"])
+def api_set_source_model(server_id):
+    data = request.get_json() or {}
+    model = data.get("model", "")
+    if model not in [m["id"] for m in _AVAILABLE_MODELS]:
+        return jsonify({"error": "Invalid model"}), 400
+    if server_id == "local":
+        settings = {}
+        if _CLAUDE_SETTINGS.exists():
+            try:
+                with open(_CLAUDE_SETTINGS) as f:
+                    settings = json.load(f)
+            except Exception:
+                pass
+        settings["model"] = model
+        with open(_CLAUDE_SETTINGS, "w") as f:
+            json.dump(settings, f, indent=2)
+        return jsonify({"success": True})
+    srv = get_server(server_id)
+    if not srv:
+        return jsonify({"error": "Server not found"}), 404
+    return jsonify(write_remote_model(srv, model))
 
 
 # ── Plans & Tasks ───────────────────────────────────────────

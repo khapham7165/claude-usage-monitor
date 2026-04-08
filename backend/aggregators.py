@@ -56,6 +56,8 @@ def _save_to_disk(server_id, data):
         "session_plans": data.get("session_plans", []),
         "session_tasks": data.get("session_tasks", {}),
         "plans": data.get("plans", []),
+        "active_account": data.get("active_account", {}),
+        "active_model": data.get("active_model", ""),
     }
     with open(_disk_path(server_id), "w") as f:
         json.dump(clean, f)
@@ -96,22 +98,84 @@ def load_all_cached_sources():
             _remote_data[server_id] = data
 
 
-def store_remote_data(server_id, data):
-    """Store synced remote data in memory + persist to disk."""
-    _remote_data[server_id] = data
-    _save_to_disk(server_id, data)
+def store_remote_data(server_id, data, merge=False):
+    """Store synced remote data in memory + persist to disk.
+
+    merge=True: append/upsert new data into existing stored data (incremental sync).
+    merge=False: replace stored data entirely (full sync or first sync).
+    """
+    if merge and server_id in _remote_data:
+        merged = _merge_remote_data(_remote_data[server_id], data)
+        _remote_data[server_id] = merged
+        _save_to_disk(server_id, merged)
+    else:
+        _remote_data[server_id] = data
+        _save_to_disk(server_id, data)
     invalidate_cache()
 
 
+def _merge_remote_data(existing, new_data):
+    """Merge incremental sync result into existing stored data.
+
+    - history:       append + sort by timestamp
+    - token_logs:    append (new_data contains only new entries)
+    - session_plans: upsert by sessionId (grown-file replay replaces old state)
+    - session_tasks: upsert by sessionId
+    - plans:         upsert by slug
+    """
+    # History — append and sort
+    merged_history = existing.get("history", []) + new_data.get("history", [])
+    merged_history.sort(key=lambda r: r.get("timestamp", 0))
+
+    # Token logs — append only
+    merged_token_logs = existing.get("token_logs", []) + new_data.get("token_logs", [])
+
+    # Session plans — upsert: drop existing entries for any session that has new data
+    updated_session_ids = {sp["sessionId"] for sp in new_data.get("session_plans", [])}
+    kept_plans = [
+        sp for sp in existing.get("session_plans", [])
+        if sp.get("sessionId") not in updated_session_ids
+    ]
+    merged_session_plans = kept_plans + new_data.get("session_plans", [])
+
+    # Session tasks — upsert by sessionId
+    merged_session_tasks = dict(existing.get("session_tasks", {}))
+    merged_session_tasks.update(new_data.get("session_tasks", {}))
+
+    # Plans — upsert by slug
+    plans_by_slug = {p["slug"]: p for p in existing.get("plans", [])}
+    for p in new_data.get("plans", []):
+        plans_by_slug[p["slug"]] = p
+
+    return {
+        "synced_at": new_data.get("synced_at") or existing.get("synced_at"),
+        "history": merged_history,
+        "token_logs": merged_token_logs,
+        "session_plans": merged_session_plans,
+        "session_tasks": merged_session_tasks,
+        "plans": list(plans_by_slug.values()),
+        "active_account": new_data.get("active_account") or existing.get("active_account", {}),
+        "active_model": new_data.get("active_model") or existing.get("active_model", ""),
+    }
+
+
 def clear_remote_data(server_id):
+    from backend.cursor import clear_cursor
     _remote_data.pop(server_id, None)
     _delete_from_disk(server_id)
+    clear_cursor(server_id)
     invalidate_cache()
 
 
 def start_background_sync(server_id, server_config):
-    """Launch a background thread to sync a remote server."""
+    """Launch a background thread to sync a remote server.
+
+    Loads the existing cursor to enable incremental sync.
+    Saves the new cursor after a successful sync.
+    First sync (no cursor) is always a full sync.
+    """
     from backend.ssh_collector import sync_server
+    from backend.cursor import load_cursor, save_cursor
 
     with _sync_lock:
         # Don't start if already syncing
@@ -134,18 +198,30 @@ def start_background_sync(server_id, server_config):
                 _sync_jobs[server_id]["step_detail"] = detail
 
     def _do_sync():
+        cursor = load_cursor(server_id)
         try:
-            result = sync_server(server_config, progress_cb=_on_progress)
+            result = sync_server(server_config, progress_cb=_on_progress, cursor=cursor)
             with _sync_lock:
                 if result.get("success"):
-                    store_remote_data(server_id, {
+                    is_incremental = result.get("incremental", False)
+                    # If history was truncated, sync_server signals a full re-fetch;
+                    # force merge=False so stored history is replaced not appended.
+                    history_is_full = result.get("history_is_full", False)
+                    do_merge = is_incremental and not history_is_full
+
+                    data = {
                         "history": result["history"],
                         "token_logs": result["token_logs"],
                         "session_plans": result.get("session_plans", []),
                         "session_tasks": result.get("session_tasks", {}),
                         "plans": result.get("plans", []),
+                        "active_account": result.get("active_account", {}),
+                        "active_model": result.get("active_model", ""),
                         "synced_at": result["synced_at"],
-                    })
+                    }
+                    store_remote_data(server_id, data, merge=do_merge)
+                    save_cursor(server_id, result["new_cursor"])
+
                     _sync_jobs[server_id] = {
                         "status": "done",
                         "started_at": _sync_jobs[server_id]["started_at"],
@@ -155,6 +231,7 @@ def start_background_sync(server_id, server_config):
                             "history_count": result["history_count"],
                             "token_log_count": result["token_log_count"],
                             "synced_at": result["synced_at"],
+                            "incremental": is_incremental,
                         },
                     }
                 else:
@@ -209,6 +286,8 @@ def get_sync_status():
             "synced_at": data.get("synced_at"),
             "history_count": len(data.get("history", [])),
             "token_log_count": len(data.get("token_logs", [])),
+            "active_account": data.get("active_account", {}),
+            "active_model": data.get("active_model", ""),
         }
     return result
 

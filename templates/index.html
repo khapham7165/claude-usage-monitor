@@ -186,9 +186,37 @@
 
             <!-- TAB: Settings -->
             <div id="tabSettings" class="tab-content hidden" style="max-width: 700px;">
+
+                <!-- Sources (unified: local + SSH) -->
                 <div class="setting-group">
-                    <label>Claude.ai Accounts</label>
-                    <p class="setting-desc">Get sessionKey from: claude.ai &rarr; DevTools (F12) &rarr; Application &rarr; Cookies.</p>
+                    <label>Sources</label>
+                    <p class="setting-desc">Account and model apply to new sessions. Changes take effect immediately.</p>
+                    <div id="sourcesList"></div>
+                    <!-- Add SSH server -->
+                    <div class="add-ssh-row" style="margin-top: 10px;">
+                        <button class="btn btn-sm btn-ghost" id="toggleAddServer">+ Add SSH Server</button>
+                        <div id="addServerForm" class="add-form hidden" style="margin-top: 8px;">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px;">
+                                <input type="text" id="newServerName" placeholder="Name (e.g. Dev Box)" class="text-input">
+                                <input type="text" id="newServerHost" placeholder="Host (e.g. 10.0.0.1)" class="text-input">
+                            </div>
+                            <div class="key-input-row">
+                                <input type="text" id="newServerUser" placeholder="User (ubuntu)" class="text-input" style="max-width: 120px;">
+                                <input type="text" id="newServerKey" placeholder="Key (~/.ssh/id_rsa)" class="text-input">
+                                <button class="btn btn-primary" id="addServerBtn">Add</button>
+                            </div>
+                            <div id="addServerStatus" class="key-status"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <hr style="border-color: var(--border); margin: 20px 0;">
+
+                <!-- Accounts (credential store) -->
+                <div class="setting-group">
+                    <label>Accounts</label>
+                    <p class="setting-desc">Claude.ai credentials — used to switch accounts on sources above.
+                        Get sessionKey from: claude.ai &rarr; DevTools (F12) &rarr; Application &rarr; Cookies.</p>
                     <div id="accountsList"></div>
                     <div class="add-form" style="margin-top: 12px;">
                         <input type="text" id="newAccountName" placeholder="Account name (optional)" class="text-input" style="margin-bottom: 6px;">
@@ -197,26 +225,6 @@
                             <button class="btn btn-primary" id="addAccountBtn">Add</button>
                         </div>
                         <div id="addAccountStatus" class="key-status"></div>
-                    </div>
-                </div>
-
-                <hr style="border-color: var(--border); margin: 20px 0;">
-
-                <div class="setting-group">
-                    <label>Remote Servers (SSH)</label>
-                    <p class="setting-desc">Fetch usage data from remote machines via SSH.</p>
-                    <div id="serversList"></div>
-                    <div class="add-form" style="margin-top: 12px;">
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px;">
-                            <input type="text" id="newServerName" placeholder="Name (e.g. Dev Box)" class="text-input">
-                            <input type="text" id="newServerHost" placeholder="Host (e.g. 10.0.0.1)" class="text-input">
-                        </div>
-                        <div class="key-input-row">
-                            <input type="text" id="newServerUser" placeholder="User (ubuntu)" class="text-input" style="max-width: 120px;">
-                            <input type="text" id="newServerKey" placeholder="Key (~/.ssh/id_rsa)" class="text-input">
-                            <button class="btn btn-primary" id="addServerBtn">Add</button>
-                        </div>
-                        <div id="addServerStatus" class="key-status"></div>
                     </div>
                 </div>
 

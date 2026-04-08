@@ -120,6 +120,103 @@ def parse_project_session_logs():
     return results
 
 
+def parse_plans():
+    """Read all ~/.claude/plans/*.md files and return plan metadata."""
+    plans_dir = CLAUDE_DIR / "plans"
+    plans = []
+    if not plans_dir.exists():
+        return plans
+    for f in sorted(plans_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            content = f.read_text(encoding="utf-8", errors="replace")
+            title = f.stem
+            for line in content.splitlines():
+                if line.startswith("# "):
+                    title = line[2:].strip()
+                    break
+            plans.append({
+                "slug": f.stem,
+                "title": title,
+                "content": content,
+                "preview": content[:300].rstrip(),
+                "createdAt": datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat(),
+                "filePath": str(f),
+            })
+        except Exception:
+            continue
+    return plans
+
+
+def scan_session_annotations():
+    """Single-pass scan of all session .jsonl files.
+    Returns (session_plans, session_tasks) where:
+      session_plans: list of {sessionId, slug, timestamp, planFilePath, allowedPrompts}
+      session_tasks: dict of {sessionId: [task, ...]} with final task states
+    """
+    session_plans = []
+    session_tasks = {}  # {sessionId: {task_num_str: task_dict}}
+
+    for project_dir in _list_project_dirs():
+        for jsonl_file in project_dir.glob("*.jsonl"):
+            session_id = jsonl_file.stem
+            tasks = {}       # str(counter) -> task dict
+            task_counter = 0
+            try:
+                with open(jsonl_file, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            record = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if record.get("type") != "assistant":
+                            continue
+                        content = record.get("message", {}).get("content", [])
+                        if not isinstance(content, list):
+                            continue
+                        ts = record.get("timestamp", "")
+                        for block in content:
+                            if not isinstance(block, dict):
+                                continue
+                            name = block.get("name", "")
+                            inp = block.get("input", {})
+                            if name == "ExitPlanMode":
+                                plan_path = inp.get("planFilePath", "")
+                                slug = Path(plan_path).stem if plan_path else ""
+                                session_plans.append({
+                                    "sessionId": session_id,
+                                    "slug": slug,
+                                    "timestamp": ts,
+                                    "planFilePath": plan_path,
+                                    "allowedPrompts": inp.get("allowedPrompts", []),
+                                })
+                            elif name == "TaskCreate":
+                                task_counter += 1
+                                task_id = str(task_counter)
+                                tasks[task_id] = {
+                                    "id": task_id,
+                                    "subject": inp.get("subject", ""),
+                                    "description": inp.get("description", ""),
+                                    "status": "pending",
+                                    "createdAt": ts,
+                                }
+                            elif name == "TaskUpdate":
+                                task_id = str(inp.get("taskId", ""))
+                                if task_id in tasks:
+                                    if "status" in inp:
+                                        tasks[task_id]["status"] = inp["status"]
+                                    if "subject" in inp:
+                                        tasks[task_id]["subject"] = inp["subject"]
+            except Exception:
+                continue
+            if tasks:
+                session_tasks[session_id] = list(tasks.values())
+
+    return session_plans, session_tasks
+
+
 def get_latest_session_models():
     """Return dict of {sessionId: model} based on the most recent assistant message per session."""
     latest = {}  # {sessionId: (timestamp_str, model)}

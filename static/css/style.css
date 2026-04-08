@@ -670,6 +670,196 @@ footer {
 .model-badge.sonnet  { color: var(--accent);  background: rgba(88,  166, 255, 0.12); }
 .model-badge.haiku   { color: var(--accent2); background: rgba(63,  185,  80, 0.12); }
 
+/* ── Plans Card ─────────────────────────────────────────── */
+.plan-item {
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+}
+.plan-item:last-child { border-bottom: none; }
+
+.plan-item-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 4px;
+}
+.plan-title {
+    font-weight: 600;
+    font-size: 0.92rem;
+    color: var(--text);
+}
+.plan-date {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+.plan-item-meta {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    margin-bottom: 6px;
+}
+.plan-preview {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    font-family: inherit;
+    margin-bottom: 8px;
+    line-height: 1.5;
+    max-height: 3.6em;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+}
+.plan-view-btn { margin-top: 2px; }
+
+/* ── Plan & Task badges in session table ─────────────────── */
+.plan-badge {
+    background: rgba(188, 140, 255, 0.12);
+    color: var(--accent5);
+    border: 1px solid rgba(188, 140, 255, 0.25);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 0.73rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.plan-badge:hover { background: rgba(188, 140, 255, 0.22); }
+
+.task-chip {
+    background: rgba(88, 166, 255, 0.1);
+    color: var(--accent);
+    border: 1px solid rgba(88, 166, 255, 0.25);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 0.73rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.task-chip:hover { background: rgba(88, 166, 255, 0.2); }
+.task-chip.all-done { color: var(--accent2); background: rgba(63, 185, 80, 0.1); border-color: rgba(63, 185, 80, 0.25); }
+.task-chip.all-done:hover { background: rgba(63, 185, 80, 0.2); }
+
+/* ── Modal ───────────────────────────────────────────────── */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+.modal-overlay.hidden { display: none; }
+
+.modal {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    width: 100%;
+    max-width: 680px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.modal-header h3 { font-size: 1rem; font-weight: 600; }
+
+.modal-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.4rem;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 4px;
+}
+.modal-close:hover { color: var(--text); }
+
+.modal-meta {
+    padding: 10px 20px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.plan-content {
+    padding: 16px 20px;
+    font-size: 0.82rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-y: auto;
+    flex: 1;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+    color: var(--text);
+    margin: 0;
+}
+
+.plan-prompts {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.plan-prompts.hidden { display: none; }
+.plan-prompts-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+}
+.plan-prompts ul { list-style: none; padding: 0; }
+.plan-prompts li { font-size: 0.8rem; color: var(--text-muted); padding: 3px 0; }
+.prompt-tool {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    background: var(--bg-hover);
+    color: var(--accent);
+    border-radius: 3px;
+    padding: 1px 5px;
+    margin-right: 6px;
+}
+
+/* ── Tasks list (modal) ──────────────────────────────────── */
+.tasks-list {
+    list-style: none;
+    padding: 12px 20px;
+    margin: 0;
+    overflow-y: auto;
+    flex: 1;
+}
+.task-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.85rem;
+}
+.task-item:last-child { border-bottom: none; }
+.task-status-icon { color: var(--text-muted); flex-shrink: 0; font-size: 0.9rem; }
+.task-item.done .task-status-icon { color: var(--accent2); }
+.task-item.done .task-subject { color: var(--text-muted); text-decoration: line-through; }
+.task-item.deleted { opacity: 0.4; }
+.task-subject { line-height: 1.4; }
+
 /* ── Responsive ──────────────────────────────────────────── */
 @media (max-width: 1100px) {
     .cards-row { grid-template-columns: repeat(2, 1fr); }

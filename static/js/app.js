@@ -116,11 +116,24 @@ function renderActiveSessions(sessions) {
         const srcLabel = s._host || sourceLabel(src);
         const modelName = getModelShortName(s.model || '');
         const modelCls = getModelClass(s.model || '');
+        // Look up plan/task info from session history data
+        const hist = _allSessions.find(h => h.sessionId === s.sessionId);
+        const planSlug = hist?.planSlug || null;
+        const taskCount = hist?.taskCount || 0;
+        const completedTaskCount = hist?.completedTaskCount || 0;
+        const planCell = planSlug
+            ? `<button class="plan-badge" data-slug="${planSlug}">Plan</button>`
+            : '<span style="color:var(--text-muted)">—</span>';
+        const taskCell = taskCount > 0
+            ? `<button class="task-chip ${completedTaskCount === taskCount ? 'all-done' : ''}" data-sid="${s.sessionId}">${completedTaskCount}/${taskCount}</button>`
+            : '<span style="color:var(--text-muted)">—</span>';
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td><code>${s.pid}</code></td>
             <td>${(s.cwd || '').split('/').pop()}</td>
             <td><span class="model-badge ${modelCls}">${modelName}</span></td>
+            <td>${planCell}</td>
+            <td>${taskCell}</td>
             <td><span class="source-tag">${srcLabel}</span></td>
             <td>${formatDate(new Date(s.startedAt).toISOString())}</td>
             <td>${formatDuration(Date.now() - s.startedAt)}</td>
@@ -128,6 +141,12 @@ function renderActiveSessions(sessions) {
             <td><button class="kill-btn" data-pid="${s.pid}" data-source="${src}">Terminate</button></td>`;
         tbody.appendChild(tr);
     }
+    tbody.querySelectorAll('.plan-badge').forEach(btn => {
+        btn.addEventListener('click', () => openPlanModal(_plansCache[btn.dataset.slug]));
+    });
+    tbody.querySelectorAll('.task-chip').forEach(btn => {
+        btn.addEventListener('click', () => openTasksModal(btn.dataset.sid));
+    });
     tbody.querySelectorAll('.kill-btn').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             const pid = parseInt(e.target.dataset.pid);
@@ -180,6 +199,12 @@ function _renderSessionsPage() {
     tbody.innerHTML = '';
     for (const s of slice) {
         const srcLabel = sourceLabel(s.source);
+        const planCell = s.planSlug
+            ? `<button class="plan-badge" data-slug="${s.planSlug}">Plan</button>`
+            : '<span style="color:var(--text-muted)">—</span>';
+        const taskCell = s.taskCount > 0
+            ? `<button class="task-chip ${s.completedTaskCount === s.taskCount ? 'all-done' : ''}" data-sid="${s.sessionId}">${s.completedTaskCount}/${s.taskCount}</button>`
+            : '<span style="color:var(--text-muted)">—</span>';
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td><code>${truncateId(s.sessionId)}</code></td>
@@ -188,9 +213,17 @@ function _renderSessionsPage() {
             <td>${formatDate(s.startTime)}</td>
             <td>${formatDuration(s.durationMs)}</td>
             <td>${s.messageCount}</td>
+            <td>${planCell}</td>
+            <td>${taskCell}</td>
             <td><span class="status-badge ${s.isActive ? 'status-active' : 'status-completed'}">${s.isActive ? 'Active' : 'Done'}</span></td>`;
         tbody.appendChild(tr);
     }
+    tbody.querySelectorAll('.plan-badge').forEach(btn => {
+        btn.addEventListener('click', () => openPlanModal(_plansCache[btn.dataset.slug]));
+    });
+    tbody.querySelectorAll('.task-chip').forEach(btn => {
+        btn.addEventListener('click', () => openTasksModal(btn.dataset.sid));
+    });
 
     document.getElementById('sessionsTotalLabel').textContent = `${total} sessions`;
     document.getElementById('pageInfo').textContent = `Page ${_sessionsPage + 1} of ${totalPages}`;
@@ -231,8 +264,57 @@ async function loadModelSetting() {
     } catch {}
 }
 
+async function loadPlans() {
+    const plans = await fetchJSON('/api/plans');
+    _plansCache = Object.fromEntries(plans.map(p => [p.slug, p]));
+}
+
+let _plansCache = {};
+
+function openPlanModal(plan) {
+    if (!plan) return;
+    document.getElementById('planModalTitle').textContent = plan.title;
+    const date = plan.createdAt ? new Date(plan.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    document.getElementById('planModalMeta').innerHTML =
+        `${plan.sessionId ? `Session: <code>${plan.sessionId}</code>` : ''} ${date ? `&nbsp;·&nbsp; ${date}` : ''}`;
+    document.getElementById('planModalContent').textContent = plan.content;
+    const promptsEl = document.getElementById('planModalPrompts');
+    const promptsList = document.getElementById('planModalPromptsList');
+    if (plan.allowedPrompts?.length) {
+        promptsList.innerHTML = plan.allowedPrompts.map(p =>
+            `<li><span class="prompt-tool">${p.tool}</span> ${p.prompt.replace(/</g, '&lt;')}</li>`
+        ).join('');
+        promptsEl.classList.remove('hidden');
+    } else {
+        promptsEl.classList.add('hidden');
+    }
+    document.getElementById('planModal').classList.remove('hidden');
+}
+
+async function openTasksModal(sessionId) {
+    const tasks = await fetchJSON(`/api/sessions/${sessionId}/tasks`);
+    document.getElementById('tasksModalMeta').innerHTML = `Session: <code>${sessionId}</code>`;
+    const list = document.getElementById('tasksModalList');
+    list.innerHTML = tasks.length
+        ? tasks.map(t => {
+            const done = t.status === 'completed';
+            const deleted = t.status === 'deleted';
+            return `<li class="task-item ${done ? 'done' : ''} ${deleted ? 'deleted' : ''}">
+                <span class="task-status-icon">${done ? '✓' : deleted ? '✕' : '○'}</span>
+                <span class="task-subject">${t.subject.replace(/</g, '&lt;')}</span>
+            </li>`;
+        }).join('')
+        : '<li class="task-item" style="color:var(--text-muted)">No tasks recorded</li>';
+    document.getElementById('tasksModal').classList.remove('hidden');
+}
+
+document.getElementById('planModalClose').addEventListener('click', () => document.getElementById('planModal').classList.add('hidden'));
+document.getElementById('tasksModalClose').addEventListener('click', () => document.getElementById('tasksModal').classList.add('hidden'));
+document.getElementById('planModal').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden'); });
+document.getElementById('tasksModal').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden'); });
+
 async function loadSessionsTab() {
-    await Promise.all([loadOverview(), loadSessions(), loadModelSetting()]);
+    await Promise.all([loadOverview(), loadSessions(), loadModelSetting(), loadPlans()]);
     renderActiveSessions(_lastActiveSessions);
 }
 

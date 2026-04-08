@@ -1,6 +1,6 @@
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from backend.parsers import parse_history, parse_project_session_logs
+from backend.parsers import parse_history, parse_project_session_logs, parse_plans, scan_session_annotations
 from backend.cost_model import estimate_cost, get_model_display_name
 from backend.active_sessions import get_active_sessions
 import os
@@ -464,6 +464,11 @@ def daily_token_cost(source=None):
     ]
 
 
+def _annotations():
+    """Cached single-pass scan of session files for plans and tasks."""
+    return _get_cached("session_annotations", scan_session_annotations)
+
+
 def sessions_list(source=None):
     records = _history(source)
     by_session = defaultdict(lambda: {
@@ -482,11 +487,22 @@ def sessions_list(source=None):
 
     active_pids = {s["sessionId"] for s in get_active_sessions(source=source)}
 
+    # Enrich with plan and task annotations (uses cached single-pass scan)
+    session_plans_raw, session_tasks_raw = _annotations()
+    # Keep latest plan per session (ExitPlanMode may be called multiple times)
+    plan_by_session = {}
+    for sp in session_plans_raw:
+        sid = sp["sessionId"]
+        if sid not in plan_by_session or sp["timestamp"] > plan_by_session[sid][0]:
+            plan_by_session[sid] = (sp["timestamp"], sp["slug"])
+    plan_by_session = {sid: v[1] for sid, v in plan_by_session.items()}
+
     result = []
     for sid, data in by_session.items():
         duration_ms = 0
         if data["first"] and data["last"]:
             duration_ms = int((data["last"] - data["first"]).total_seconds() * 1000)
+        tasks = session_tasks_raw.get(sid, [])
         result.append({
             "sessionId": sid,
             "messageCount": data["messages"],
@@ -497,6 +513,59 @@ def sessions_list(source=None):
             "projectName": os.path.basename(list(data["projects"])[0]) if data["projects"] else "unknown",
             "isActive": sid in active_pids,
             "source": data["source"],
+            "planSlug": plan_by_session.get(sid),
+            "taskCount": len(tasks),
+            "completedTaskCount": sum(1 for t in tasks if t.get("status") == "completed"),
         })
     result.sort(key=lambda x: x["startTime"] or "", reverse=True)
     return result
+
+
+def plans_list():
+    """Return all plans merged with their session binding."""
+    plan_files = {p["slug"]: p for p in _get_cached("plans", parse_plans)}
+    session_plans_raw, _ = _annotations()
+
+    # Deduplicate: one entry per slug, keeping the latest occurrence
+    by_slug = {}
+    for sp in session_plans_raw:
+        slug = sp["slug"]
+        if slug not in by_slug or sp["timestamp"] > by_slug[slug]["timestamp"]:
+            by_slug[slug] = sp
+
+    result = []
+    for slug, sp in by_slug.items():
+        pf = plan_files.get(slug, {})
+        result.append({
+            "slug": slug,
+            "title": pf.get("title", slug),
+            "preview": pf.get("preview", ""),
+            "content": pf.get("content", ""),
+            "sessionId": sp["sessionId"],
+            "createdAt": sp["timestamp"] or pf.get("createdAt", ""),
+            "allowedPrompts": sp["allowedPrompts"],
+            "hasFile": slug in plan_files,
+        })
+
+    # Plans on disk that weren't found in any session scan
+    for slug, pf in plan_files.items():
+        if slug not in by_slug:
+            result.append({
+                "slug": slug,
+                "title": pf["title"],
+                "preview": pf["preview"],
+                "content": pf["content"],
+                "sessionId": None,
+                "createdAt": pf["createdAt"],
+                "allowedPrompts": [],
+                "hasFile": True,
+            })
+
+    result.sort(key=lambda x: x["createdAt"] or "", reverse=True)
+    return result
+
+
+def session_tasks(session_id):
+    """Return the task list for a specific session."""
+    _, session_tasks_raw = _annotations()
+    return session_tasks_raw.get(session_id, [])

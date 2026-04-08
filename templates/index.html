@@ -135,7 +135,7 @@
                     <h2>Active Sessions <span class="badge" id="activeCount">0</span></h2>
                     <div class="table-container">
                         <table id="activeSessionsTable">
-                            <thead><tr><th>PID</th><th>Project</th><th>Last Model</th><th>Source</th><th>Started</th><th>Uptime</th><th>Type</th><th>Action</th></tr></thead>
+                            <thead><tr><th>PID</th><th>Project</th><th>Last Model</th><th>Plan</th><th>Tasks</th><th>Source</th><th>Started</th><th>Uptime</th><th>Type</th><th>Action</th></tr></thead>
                             <tbody id="activeSessionsBody"></tbody>
                         </table>
                     </div>
@@ -148,7 +148,7 @@
                     </div>
                     <div class="table-container">
                         <table id="sessionsTable">
-                            <thead><tr><th>Session ID</th><th>Project</th><th>Source</th><th>Start Time</th><th>Duration</th><th>Messages</th><th>Status</th></tr></thead>
+                            <thead><tr><th>Session ID</th><th>Project</th><th>Source</th><th>Start Time</th><th>Duration</th><th>Messages</th><th>Plan</th><th>Tasks</th><th>Status</th></tr></thead>
                             <tbody id="sessionsBody"></tbody>
                         </table>
                     </div>
@@ -220,6 +220,34 @@
         <span>Data source: ~/.claude/</span>
         <span id="recordCount"></span>
     </footer>
+
+    <!-- Plan detail modal -->
+    <div id="planModal" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="planModalTitle"></h3>
+                <button class="modal-close" id="planModalClose">&times;</button>
+            </div>
+            <div class="modal-meta" id="planModalMeta"></div>
+            <pre class="plan-content" id="planModalContent"></pre>
+            <div id="planModalPrompts" class="plan-prompts hidden">
+                <div class="plan-prompts-label">Allowed prompts</div>
+                <ul id="planModalPromptsList"></ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tasks modal -->
+    <div id="tasksModal" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Session Tasks</h3>
+                <button class="modal-close" id="tasksModalClose">&times;</button>
+            </div>
+            <div class="modal-meta" id="tasksModalMeta"></div>
+            <ul id="tasksModalList" class="tasks-list"></ul>
+        </div>
+    </div>
 
     <script src="/static/js/utils.js"></script>
     <script src="/static/js/charts.js"></script>

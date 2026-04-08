@@ -285,6 +285,17 @@ def api_sync_status():
     return jsonify(aggregators.get_all_sync_jobs())
 
 
+# ── Plans & Tasks ───────────────────────────────────────────
+@app.route("/api/plans")
+def api_plans():
+    return jsonify(aggregators.plans_list())
+
+
+@app.route("/api/sessions/<session_id>/tasks")
+def api_session_tasks(session_id):
+    return jsonify(aggregators.session_tasks(session_id))
+
+
 # ── Model Settings ──────────────────────────────────────────
 @app.route("/api/settings/model", methods=["GET"])
 def api_get_model():

@@ -25,20 +25,35 @@ def generate_id(prefix="id"):
 
 _KC_SERVICE = "Claude Code-credentials"
 _KC_ACCOUNT = "Claude Key"
+_CREDENTIALS_FILE = os.path.expanduser("~/.claude/.credentials.json")
+
 
 
 def _read_keychain_blob():
-    """Read the full Claude Code-credentials JSON blob from Keychain."""
+    """Read the full Claude Code credentials JSON blob.
+    Tries Keychain first, then falls back to ~/.claude/.credentials.json."""
+    # Try Keychain (legacy / Linux format)
     try:
         result = subprocess.run(
             ["security", "find-generic-password", "-s", _KC_SERVICE, "-w"],
             capture_output=True, text=True, timeout=5,
         )
-        if result.returncode != 0:
-            return None
-        return json.loads(result.stdout.strip())
+        if result.returncode == 0:
+            blob = json.loads(result.stdout.strip())
+            if isinstance(blob, dict):
+                return blob
     except Exception:
-        return None
+        pass
+
+    # Fallback: ~/.claude/.credentials.json (current Claude Code format)
+    try:
+        if os.path.exists(_CREDENTIALS_FILE):
+            with open(_CREDENTIALS_FILE) as f:
+                return json.load(f)
+    except Exception:
+        pass
+
+    return None
 
 
 def get_oauth_token_from_keychain():
@@ -47,35 +62,6 @@ def get_oauth_token_from_keychain():
     if not blob:
         return None
     return blob.get("claudeAiOauth", {}).get("accessToken")
-
-
-def get_current_credential_blob():
-    """Return the full credential blob currently active in Keychain."""
-    return _read_keychain_blob()
-
-
-def get_active_org_uuid():
-    """Return the organizationUuid from the current Keychain credentials.
-    Checks top-level and nested under claudeAiOauth (Linux file format)."""
-    blob = _read_keychain_blob()
-    if not blob:
-        return None
-    return blob.get("organizationUuid") or (blob.get("claudeAiOauth") or {}).get("organizationUuid")
-
-
-def apply_credential_blob(blob):
-    """Write a credential blob to the Claude Code-credentials Keychain entry.
-    Uses -U to update if the entry already exists."""
-    try:
-        blob_json = json.dumps(blob)
-        result = subprocess.run(
-            ["security", "add-generic-password",
-             "-U", "-s", _KC_SERVICE, "-a", _KC_ACCOUNT, "-w", blob_json],
-            capture_output=True, text=True, timeout=5,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
 
 
 def get_api_key():

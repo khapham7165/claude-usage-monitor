@@ -26,10 +26,6 @@
                 <button class="range-btn" data-days="90">90d</button>
                 <button class="range-btn" data-days="0">All</button>
             </div>
-            <label class="refresh-toggle">
-                <input type="checkbox" id="autoRefresh" checked>
-                <span>Auto-refresh</span>
-            </label>
             <span id="lastUpdated" class="last-updated"></span>
         </div>
     </header>
@@ -78,28 +74,6 @@
                     </div>
                 </div>
 
-                <div class="cards-row">
-                    <div class="card summary-card small">
-                        <div class="card-label">Today</div>
-                        <div class="card-value" id="todayMessages">--</div>
-                        <div class="card-sub">messages</div>
-                    </div>
-                    <div class="card summary-card small">
-                        <div class="card-label">Yesterday</div>
-                        <div class="card-value" id="yesterdayMessages">--</div>
-                        <div class="card-sub">messages</div>
-                    </div>
-                    <div class="card summary-card small">
-                        <div class="card-label">Date Range</div>
-                        <div class="card-value" id="dateRange" style="font-size: 1rem;">--</div>
-                    </div>
-                    <div class="card summary-card small">
-                        <div class="card-label">Streak</div>
-                        <div class="card-value" id="streak">--</div>
-                        <div class="card-sub">consecutive days</div>
-                    </div>
-                </div>
-
                 <div class="card full-width">
                     <h2>Activity Over Time</h2>
                     <canvas id="activityChart"></canvas>
@@ -107,11 +81,11 @@
 
                 <div class="two-col">
                     <div class="card"><h2>Projects</h2><canvas id="projectChart"></canvas></div>
-                    <div class="card"><h2>Activity Calendar</h2><div id="heatmapContainer" class="heatmap-container"></div></div>
+                    <div class="card"><h2>Model Usage</h2><canvas id="modelChart"></canvas><div id="modelTable" class="model-table"></div></div>
                 </div>
 
                 <div class="two-col">
-                    <div class="card"><h2>Model Usage</h2><canvas id="modelChart"></canvas><div id="modelTable" class="model-table"></div></div>
+                    <div class="card"><h2>Activity Calendar</h2><div id="heatmapContainer" class="heatmap-container"></div></div>
                     <div class="card"><h2>Token Cost Trend</h2><canvas id="costChart"></canvas></div>
                 </div>
             </div>
@@ -127,14 +101,6 @@
                             <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
                         </select>
                         <span id="modelSaveStatus" class="model-save-status"></span>
-                    </div>
-                    <div class="toolbar-divider"></div>
-                    <div class="model-switcher">
-                        <span class="model-switcher-label">Account:</span>
-                        <select id="globalAccountSelect" class="model-select">
-                            <option value="">— no accounts —</option>
-                        </select>
-                        <span id="accountSwitchStatus" class="model-save-status"></span>
                     </div>
                     <span class="model-switcher-hint">applies to new sessions</span>
                 </div>
@@ -190,7 +156,7 @@
                 <!-- Accounts -->
                 <div class="setting-group">
                     <label>Accounts</label>
-                    <p class="setting-desc">Your Claude.ai identities. An account can have a session key (for usage tracking), captured credentials (for auth switching), or both.</p>
+                    <p class="setting-desc">Your Claude.ai identities for usage tracking.</p>
                     <div id="accountsList"></div>
                     <div class="settings-add-row" style="margin-top: 10px;">
                         <button class="btn btn-sm btn-ghost" id="toggleAddAccount">+ Add via Session Key</button>
@@ -208,11 +174,11 @@
 
                 <hr style="border-color: var(--border); margin: 20px 0;">
 
-                <!-- Sources -->
+                <!-- SSH Servers -->
                 <div class="setting-group">
-                    <label>Sources</label>
-                    <p class="setting-desc">Machines running Claude Code. Assign which account and model each uses; sync to pull usage history.</p>
-                    <div id="sourcesList"></div>
+                    <label>SSH Servers</label>
+                    <p class="setting-desc">Add remote machines running Claude Code to sync usage history.</p>
+                    <div id="serversList"></div>
                     <div class="settings-add-row" style="margin-top: 10px;">
                         <button class="btn btn-sm btn-ghost" id="toggleAddServer">+ Add SSH Server</button>
                         <div id="addServerForm" class="add-form hidden" style="margin-top: 8px;">

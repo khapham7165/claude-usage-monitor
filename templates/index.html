@@ -20,12 +20,6 @@
                 <option value="">All Sources</option>
                 <option value="local">Local</option>
             </select>
-            <div class="range-selector">
-                <button class="range-btn active" data-days="7">7d</button>
-                <button class="range-btn" data-days="30">30d</button>
-                <button class="range-btn" data-days="90">90d</button>
-                <button class="range-btn" data-days="0">All</button>
-            </div>
             <span id="lastUpdated" class="last-updated"></span>
         </div>
     </header>
@@ -51,6 +45,14 @@
 
             <!-- TAB: Analytics -->
             <div id="tabAnalytics" class="tab-content">
+                <div class="analytics-toolbar">
+                    <div class="range-selector">
+                        <button class="range-btn active" data-days="7">7d</button>
+                        <button class="range-btn" data-days="30">30d</button>
+                        <button class="range-btn" data-days="90">90d</button>
+                        <button class="range-btn" data-days="0">All</button>
+                    </div>
+                </div>
                 <div class="cards-row">
                     <div class="card summary-card">
                         <div class="card-label">Total Sessions</div>

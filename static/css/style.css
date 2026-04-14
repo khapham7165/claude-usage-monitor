@@ -227,6 +227,14 @@ main {
     margin: 0;
 }
 
+/* ── Analytics toolbar ───────────────────────────────────── */
+.analytics-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    margin-bottom: 12px;
+}
+
 /* ── Cards ───────────────────────────────────────────────── */
 .cards-row {
     display: grid;

@@ -73,7 +73,8 @@ def api_monthly():
 # ── Projects ─────────────────────────────────────────────────
 @app.route("/api/projects")
 def api_projects():
-    return jsonify(aggregators.project_breakdown(source=_source()))
+    days = int(request.args.get("days", 0))
+    return jsonify(aggregators.project_breakdown(days=days, source=_source()))
 
 
 # ── Sessions ─────────────────────────────────────────────────
@@ -133,12 +134,14 @@ def api_kill_session():
 # ── Tokens ───────────────────────────────────────────────────
 @app.route("/api/tokens")
 def api_tokens():
-    return jsonify(aggregators.token_summary(source=_source()))
+    days = int(request.args.get("days", 0))
+    return jsonify(aggregators.token_summary(days=days, source=_source()))
 
 
 @app.route("/api/tokens/daily")
 def api_daily_tokens():
-    return jsonify(aggregators.daily_token_cost(source=_source()))
+    days = int(request.args.get("days", 0))
+    return jsonify(aggregators.daily_token_cost(days=days, source=_source()))
 
 
 # ── Heatmap ──────────────────────────────────────────────────

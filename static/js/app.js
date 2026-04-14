@@ -157,10 +157,10 @@ async function loadActivity() {
     createActivityChart('activityChart', data);
 }
 
-async function loadProjects() { createProjectChart('projectChart', await fetchJSON(apiUrl('/api/projects'))); }
+async function loadProjects() { createProjectChart('projectChart', await fetchJSON(apiUrl(`/api/projects?days=${currentDays}`))); }
 async function loadHeatmap() { renderHeatmap('heatmapContainer', await fetchJSON(apiUrl('/api/activity/daily?days=365'))); }
-async function loadTokens() { const d = await fetchJSON(apiUrl('/api/tokens')); createModelDoughnut('modelChart', d); renderModelTable('modelTable', d); }
-async function loadCostTrend() { createCostChart('costChart', await fetchJSON(apiUrl('/api/tokens/daily'))); }
+async function loadTokens() { const d = await fetchJSON(apiUrl(`/api/tokens?days=${currentDays}`)); createModelDoughnut('modelChart', d); renderModelTable('modelTable', d); }
+async function loadCostTrend() { createCostChart('costChart', await fetchJSON(apiUrl(`/api/tokens/daily?days=${currentDays}`))); }
 
 // ── Sessions pagination state ───────────────────────────────
 let _allSessions = [];
@@ -466,7 +466,7 @@ document.querySelectorAll('.range-btn').forEach(btn => {
         currentDays = parseInt(btn.dataset.days);
         savePrefs();
         loadOverview();
-        if (currentTab === 'analytics') loadActivity();
+        if (currentTab === 'analytics') { loadActivity(); loadProjects(); loadCostTrend(); loadTokens(); }
     });
 });
 

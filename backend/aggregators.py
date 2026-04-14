@@ -412,21 +412,36 @@ def overview(days=0, source=None):
 
 def daily_activity(days=90, source=None):
     records = _history(source)
-    cutoff = datetime.now(timezone.utc).date() - timedelta(days=days)
+    today = datetime.now(timezone.utc).date()
 
-    by_date = defaultdict(lambda: {"messages": 0, "sessions": set()})
+    if days > 0:
+        cutoff = today - timedelta(days=days - 1)
+        span = days
+    else:
+        # "All" mode: derive range from the earliest record
+        dates = [r["_datetime"].date() for r in records]
+        if not dates:
+            return []
+        cutoff = min(dates)
+        span = (today - cutoff).days + 1
+
+    by_date = {
+        (cutoff + timedelta(days=i)).isoformat(): {"messages": 0, "sessions": set()}
+        for i in range(span)
+    }
+
     for r in records:
         d = r["_datetime"].date()
-        if days > 0 and d < cutoff:
+        if d < cutoff:
             continue
         key = d.isoformat()
-        by_date[key]["messages"] += 1
-        by_date[key]["sessions"].add(r.get("sessionId"))
+        if key in by_date:
+            by_date[key]["messages"] += 1
+            by_date[key]["sessions"].add(r.get("sessionId"))
 
     return [
         {"date": k, "messageCount": v["messages"], "sessionCount": len(v["sessions"])}
-        for k in sorted(by_date.keys())
-        for v in [by_date[k]]
+        for k, v in sorted(by_date.items())
     ]
 
 
@@ -463,10 +478,16 @@ def monthly_activity(source=None):
     ]
 
 
-def project_breakdown(source=None):
+def project_breakdown(days=0, source=None):
     records = _history(source)
+    cutoff = None
+    if days > 0:
+        cutoff = datetime.now(timezone.utc).date() - timedelta(days=days - 1)
+
     by_project = defaultdict(lambda: {"messages": 0, "sessions": set(), "last": None})
     for r in records:
+        if cutoff and r["_datetime"].date() < cutoff:
+            continue
         project = r.get("project", "unknown")
         by_project[project]["messages"] += 1
         by_project[project]["sessions"].add(r.get("sessionId"))
@@ -503,8 +524,12 @@ def hourly_heatmap(source=None):
     }
 
 
-def token_summary(source=None):
+def token_summary(days=0, source=None):
     token_logs = _token_logs(source)
+    cutoff = None
+    if days > 0:
+        cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).isoformat()
+
     by_model = defaultdict(lambda: {
         "input_tokens": 0, "output_tokens": 0,
         "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
@@ -512,6 +537,8 @@ def token_summary(source=None):
     })
 
     for t in token_logs:
+        if cutoff and t.get("timestamp", "")[:10] < cutoff:
+            continue
         model = t["model"]
         by_model[model]["input_tokens"] += t.get("input_tokens", 0)
         by_model[model]["output_tokens"] += t.get("output_tokens", 0)
@@ -540,27 +567,57 @@ def token_summary(source=None):
     return result
 
 
-def daily_token_cost(source=None):
+def daily_token_cost(days=0, source=None):
     token_logs = _token_logs(source)
-    by_date = defaultdict(lambda: {"cost": 0.0, "tokens": 0})
+    today = datetime.now(timezone.utc).date()
+    cutoff = None
+    if days > 0:
+        cutoff = today - timedelta(days=days - 1)
+        span = days
+    else:
+        cutoff = None
+        span = None
 
+    raw = defaultdict(lambda: {"cost": 0.0, "tokens": 0})
     for t in token_logs:
         ts = t.get("timestamp", "")
         if not ts:
             continue
         try:
             date_str = ts[:10]
-            by_date[date_str]["cost"] += estimate_cost(t["model"], t)
-            by_date[date_str]["tokens"] += (
+            if cutoff and date_str < cutoff.isoformat():
+                continue
+            raw[date_str]["cost"] += estimate_cost(t["model"], t)
+            raw[date_str]["tokens"] += (
                 t.get("input_tokens", 0) + t.get("output_tokens", 0)
             )
         except Exception:
             continue
 
+    if not raw:
+        return []
+
+    if span is not None:
+        by_date = {
+            (cutoff + timedelta(days=i)).isoformat(): {"cost": 0.0, "tokens": 0}
+            for i in range(span)
+        }
+    else:
+        start = min(raw.keys())
+        start_date = datetime.fromisoformat(start).date()
+        total_days = (today - start_date).days + 1
+        by_date = {
+            (start_date + timedelta(days=i)).isoformat(): {"cost": 0.0, "tokens": 0}
+            for i in range(total_days)
+        }
+
+    for date_str, v in raw.items():
+        if date_str in by_date:
+            by_date[date_str] = v
+
     return [
         {"date": k, "estimatedCostUSD": round(v["cost"], 4), "totalTokens": v["tokens"]}
-        for k in sorted(by_date.keys())
-        for v in [by_date[k]]
+        for k, v in sorted(by_date.items())
     ]
 
 

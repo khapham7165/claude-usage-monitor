@@ -333,10 +333,19 @@ function buildAccountHTML(data, linkedSource, userGivenName) {
 
     if (data.rate_5h_pct !== undefined) {
         const p = data.rate_5h_pct;
-        const reset = data.rate_5h_reset ? timeAgo(data.rate_5h_reset) : '--';
+        let resetLabel5h = '--';
+        if (data.rate_5h_reset) {
+            const diff = Math.floor((new Date(data.rate_5h_reset) - Date.now()) / 1000);
+            if (diff > 0) {
+                const h = Math.floor(diff / 3600), m = Math.floor((diff % 3600) / 60);
+                resetLabel5h = h > 0 ? `in ${h}h ${m}m` : `in ${m}m`;
+            } else {
+                resetLabel5h = 'just now';
+            }
+        }
         cards += renderStatCard('5-Hour Rate', `${p}%`,
             `<div class="usage-bar"><div class="usage-bar-fill" style="width:${Math.min(100,p)}%;background:${barColor(p)}"></div></div>`,
-            p > 0 ? `Resets ${reset}` : 'No usage');
+            p > 0 ? `Resets ${resetLabel5h}` : 'No usage');
     }
     if (data.rate_7d_pct !== undefined) {
         const p = data.rate_7d_pct;

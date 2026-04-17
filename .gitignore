@@ -24,3 +24,12 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+# build artifacts
+build/
+dist/
+*.spec.bak
+*.egg-info/
+
+# logs
+*.log

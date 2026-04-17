@@ -1,12 +1,29 @@
-import webbrowser
 import threading
 import signal
 import os
+import sys
 import json
+import logging
 import urllib.request
 import urllib.error
 from pathlib import Path
 from flask import Flask, jsonify, request, render_template
+
+# Log to ~/Library/Logs/ on macOS, home dir elsewhere
+_log_dir = Path.home() / "Library" / "Logs" if sys.platform == "darwin" else Path.home()
+_log_path = _log_dir / "ClaudeUsageMonitor.log"
+logging.basicConfig(
+    filename=str(_log_path),
+    level=logging.WARNING,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+
+def _resource(relative_path):
+    """Resolve path whether running as script or PyInstaller bundle."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, relative_path)
 from backend import aggregators
 from backend.active_sessions import get_active_sessions
 from backend.auth import get_api_key, get_auth_status, save_manual_key, delete_manual_key
@@ -19,7 +36,9 @@ from backend.ssh_collector import (
     test_connection, sync_server,
 )
 
-app = Flask(__name__)
+app = Flask(__name__,
+            template_folder=_resource("templates"),
+            static_folder=_resource("static"))
 PORT = 5111
 
 _CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
@@ -222,9 +241,11 @@ def api_account_usage(account_id):
     try:
         result = fetch_full_account_usage(account_id)
         if "error" in result:
+            logging.error("account usage error for %s: %s", account_id, result)
             return jsonify(result), 401
         return jsonify(result)
     except Exception as e:
+        logging.exception("account usage exception for %s", account_id)
         return jsonify({"error": str(e)}), 500
 
 
@@ -431,11 +452,21 @@ def _extract_rate_limits(headers):
     }
 
 
-def open_browser():
-    webbrowser.open(f"http://localhost:{PORT}")
+def _start_flask():
+    app.run(host="127.0.0.1", port=PORT, debug=False, use_reloader=False)
 
 
 if __name__ == "__main__":
-    threading.Timer(1.0, open_browser).start()
-    print(f"Claude Usage Monitor running at http://localhost:{PORT}")
-    app.run(host="127.0.0.1", port=PORT, debug=False)
+    import webview
+
+    t = threading.Thread(target=_start_flask, daemon=True)
+    t.start()
+
+    window = webview.create_window(
+        "Claude Usage Monitor",
+        f"http://localhost:{PORT}",
+        width=1280,
+        height=820,
+        min_size=(900, 600),
+    )
+    webview.start()

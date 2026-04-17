@@ -1,3 +1,4 @@
 flask>=3.0
 cloudscraper>=1.2
 paramiko>=3.0
+pywebview>=5.0

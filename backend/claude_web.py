@@ -1,15 +1,28 @@
 """Claude.ai web API integration — multi-account support."""
 import os
+import sys
+import logging
 import certifi
 import cloudscraper
 from backend.auth import _load_config, _save_config, generate_id
 
-os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+log = logging.getLogger(__name__)
+
+# In a PyInstaller bundle, certifi.where() points inside the frozen archive.
+# We bundle cacert.pem alongside and point SSL env vars at it explicitly.
+if hasattr(sys, "_MEIPASS"):
+    _cert = os.path.join(sys._MEIPASS, "certifi", "cacert.pem")
+else:
+    _cert = certifi.where()
+os.environ["SSL_CERT_FILE"] = _cert
+os.environ["REQUESTS_CA_BUNDLE"] = _cert
 
 
 def _get_scraper(session_key):
     scraper = cloudscraper.create_scraper()
+    scraper.verify = _cert
     scraper.cookies.set("sessionKey", session_key, domain="claude.ai")
+    scraper.headers.update({"Accept-Encoding": "identity"})
     return scraper
 
 
@@ -115,13 +128,15 @@ def _api_bootstrap(scraper):
          "role": m.get("role")}
         for m in memberships
     ]
-    return {
+    result = {
         "account_uuid": account.get("uuid"),
         "email": account.get("email_address"),
         "full_name": account.get("full_name"),
         "display_name": account.get("display_name"),
         "organizations": orgs,
     }
+    log.debug("bootstrap result: %s", result)
+    return result
 
 
 def _api_usage(scraper, org_id):
@@ -130,6 +145,7 @@ def _api_usage(scraper, org_id):
         headers=_headers(),
     )
     if resp.status_code != 200:
+        log.error("usage %s: HTTP %s body=%s", org_id, resp.status_code, resp.text[:500])
         return {"error": f"HTTP {resp.status_code}"}
     return resp.json()
 
@@ -195,13 +211,24 @@ def fetch_full_account_usage(account_id):
         if not orgs:
             return {"error": "No organizations found"}
 
-        org_id = acc.get("org_id") if acc.get("org_id") and any(o["uuid"] == acc.get("org_id") for o in orgs) else orgs[0]["uuid"]
+        # Try each org until we find one with accessible usage data.
+        # The saved org_id is tried first if still valid, then all others.
+        saved_org = acc.get("org_id", "")
+        org_order = sorted(orgs, key=lambda o: (0 if o["uuid"] == saved_org else 1))
+        org_id = None
+        usage = None
+        for candidate in org_order:
+            u = _api_usage(scraper, candidate["uuid"])
+            if "error" not in u:
+                org_id = candidate["uuid"]
+                usage = u
+                break
+        if org_id is None:
+            return {"error": "No accessible organization found — check that your session key has usage permissions"}
 
         acc["org_id"] = org_id
         acc["account_uuid"] = account_uuid
         save_account(acc)
-
-        usage = _api_usage(scraper, org_id)
         spend_limit = _api_spend_limit(scraper, org_id, account_uuid)
         overage_grant = _api_overage_credit_grant(scraper, org_id)
         prepaid = _api_prepaid_credits(scraper, org_id)

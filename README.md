@@ -48,7 +48,7 @@ A beautiful, self-hosted dashboard to monitor your [Claude](https://claude.ai) u
 **Prerequisites:** Python 3.9+ ([install](https://python.org/downloads))
 
 ```bash
-git clone https://github.com/user/claude-usage-monitor.git
+git clone https://github.com/khapk/claude-usage-monitor.git
 cd claude-usage-monitor
 ./start.sh
 ```
@@ -56,6 +56,21 @@ cd claude-usage-monitor
 Dashboard opens automatically at **http://localhost:5111**
 
 That's it. One script, no database, no Docker, no build step. `start.sh` installs dependencies and launches the server.
+
+## macOS App (Optional)
+
+Build a native `.app` you can keep in your Dock:
+
+**Prerequisites:** Python 3.9+, then install pywebview:
+
+```bash
+pip3 install pywebview
+./build_app.sh
+```
+
+The app is created at `dist/Claude Usage Monitor.app`. Drag it to `/Applications`.
+
+> The app opens a native macOS window (WebKit) — no browser tab needed.
 
 ## Setup
 

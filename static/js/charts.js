@@ -1,12 +1,12 @@
 const COLORS = {
-    accent: '#58a6ff',
-    accent2: '#3fb950',
-    accent3: '#d29922',
-    accent4: '#f78166',
-    accent5: '#bc8cff',
-    muted: '#8b949e',
-    grid: '#21262d',
-    bg: '#161b22',
+    accent: '#D97757',   /* Claude orange */
+    accent2: '#6fa85c',  /* Claude green */
+    accent3: '#e8a45c',  /* Claude amber */
+    accent4: '#e08a60',  /* warm orange */
+    accent5: '#8bb4e0',  /* Claude soft blue */
+    muted: '#9c9a92',
+    grid: '#2e2d2b',
+    bg: '#232221',
 };
 
 const MODEL_COLORS = [COLORS.accent, COLORS.accent5, COLORS.accent3, COLORS.accent4, COLORS.accent2];
@@ -236,12 +236,12 @@ function renderHeatmap(containerId, dailyData) {
     container.innerHTML = '';
 
     const LEVELS = [
-        { min: 0,   max: 0,        bg: '#161b22', border: '#21262d' },
-        { min: 1,   max: 10,       bg: '#0e4429', border: '#1a5c38' },
-        { min: 11,  max: 30,       bg: '#006d32', border: '#008c41' },
-        { min: 31,  max: 80,       bg: '#26a641', border: '#2fbd4f' },
-        { min: 81,  max: 200,      bg: '#39d353', border: '#4ae565' },
-        { min: 201, max: Infinity,  bg: '#73e66d', border: '#8ff085' },
+        { min: 0,   max: 0,        bg: '#232221', border: '#2e2d2b' },
+        { min: 1,   max: 10,       bg: '#4a2e26', border: '#5c3a30' },
+        { min: 11,  max: 30,       bg: '#7a4533', border: '#8e5340' },
+        { min: 31,  max: 80,       bg: '#b06044', border: '#c46f4f' },
+        { min: 81,  max: 200,      bg: '#D97757', border: '#e08665' },
+        { min: 201, max: Infinity,  bg: '#e8a45c', border: '#eeb675' },
     ];
 
     function cellColor(count) {

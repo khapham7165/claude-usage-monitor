@@ -41,15 +41,15 @@ def estimate_cost(model, usage):
 
 
 def get_model_display_name(model_name):
-    """Shorten model name for display."""
-    if "opus" in model_name and "4-6" in model_name:
-        return "Opus 4.6"
-    if "opus" in model_name and "4-5" in model_name:
-        return "Opus 4.5"
-    if "sonnet" in model_name and "4-6" in model_name:
-        return "Sonnet 4.6"
-    if "sonnet" in model_name and "4-5" in model_name:
-        return "Sonnet 4.5"
-    if "haiku" in model_name:
-        return "Haiku 3.5"
+    """Shorten model name for display. Tries to extract family + version from any
+    `claude-<family>-<major>-<minor>[-date]` id so newly-released models show
+    nicely without code changes."""
+    if not model_name:
+        return ""
+
+    import re
+    m = re.match(r"^claude-(opus|sonnet|haiku)-(\d+)-(\d+)", model_name)
+    if m:
+        family = m.group(1).capitalize()
+        return f"{family} {m.group(2)}.{m.group(3)}"
     return model_name

@@ -333,6 +333,27 @@ def _token_logs(source=None):
     return all_logs
 
 
+def available_models(source=None):
+    """Enumerate model IDs actually observed in token logs on this machine.
+
+    Returns list of {id, name, lastUsed} sorted by most-recently-used first.
+    """
+    logs = _token_logs(source=source if source else "local")
+    latest = {}  # model_id -> latest timestamp
+    for t in logs:
+        model = (t.get("model") or "").strip()
+        if not model or model in {"unknown", "<synthetic>"}:
+            continue
+        ts = t.get("timestamp", "")
+        prev = latest.get(model)
+        if prev is None or ts > prev:
+            latest[model] = ts
+    return [
+        {"id": m, "name": get_model_display_name(m), "lastUsed": ts}
+        for m, ts in sorted(latest.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+
+
 # ── Aggregators (all accept source filter) ───────────────────
 
 def overview(days=0, source=None):

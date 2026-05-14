@@ -237,11 +237,47 @@ async function loadAnalytics() {
     await Promise.all([loadOverview(), loadActivity(), loadProjects(), loadHeatmap(), loadTokens(), loadCostTrend()]);
 }
 
+function _populateSelect(sel, items, current, placeholder) {
+    if (!sel) return;
+    sel.innerHTML = '';
+    const defOpt = document.createElement('option');
+    defOpt.value = '';
+    defOpt.textContent = placeholder;
+    sel.appendChild(defOpt);
+    items.forEach(it => {
+        const opt = document.createElement('option');
+        opt.value = it.id;
+        opt.textContent = it.name;
+        sel.appendChild(opt);
+    });
+    // Show current value even if it's not in the known list
+    if (current && !items.some(it => it.id === current)) {
+        const opt = document.createElement('option');
+        opt.value = current;
+        opt.textContent = `${current} (unknown)`;
+        sel.appendChild(opt);
+    }
+    sel.value = current || '';
+}
+
 async function loadModelSetting() {
     try {
         const data = await fetchJSON('/api/settings/model');
-        const sel = document.getElementById('globalModelSelect');
-        if (sel && data.model) sel.value = data.model;
+        _populateSelect(
+            document.getElementById('globalModelSelect'),
+            data.available || [],
+            data.model,
+            'Default (Claude Code)'
+        );
+    } catch {}
+    try {
+        const data = await fetchJSON('/api/settings/effort');
+        _populateSelect(
+            document.getElementById('globalEffortSelect'),
+            data.available || [],
+            data.effort,
+            'Default (Claude Code)'
+        );
     } catch {}
 }
 
@@ -686,30 +722,36 @@ document.getElementById('addServerBtn').addEventListener('click', async () => {
 
 document.getElementById('refreshUsageBtn').addEventListener('click', loadAccountUsage);
 
-document.getElementById('globalModelSelect').addEventListener('change', async (e) => {
-    const model = e.target.value;
-    const status = document.getElementById('modelSaveStatus');
-    status.textContent = 'Saving...';
-    status.style.color = 'var(--text-muted)';
+async function _saveSetting(url, body, statusEl) {
+    statusEl.textContent = 'Saving...';
+    statusEl.style.color = 'var(--text-muted)';
     try {
-        const res = await fetch('/api/settings/model', {
+        const res = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model }),
+            body: JSON.stringify(body),
         });
         const data = await res.json();
         if (data.success) {
-            status.textContent = 'Saved';
-            status.style.color = 'var(--accent2)';
+            statusEl.textContent = 'Saved';
+            statusEl.style.color = 'var(--accent2)';
         } else {
-            status.textContent = data.error || 'Failed';
-            status.style.color = 'var(--danger)';
+            statusEl.textContent = data.error || 'Failed';
+            statusEl.style.color = 'var(--danger)';
         }
     } catch {
-        status.textContent = 'Error';
-        status.style.color = 'var(--danger)';
+        statusEl.textContent = 'Error';
+        statusEl.style.color = 'var(--danger)';
     }
-    setTimeout(() => { status.textContent = ''; }, 2000);
+    setTimeout(() => { statusEl.textContent = ''; }, 2000);
+}
+
+document.getElementById('globalModelSelect').addEventListener('change', (e) => {
+    _saveSetting('/api/settings/model', { model: e.target.value }, document.getElementById('modelSaveStatus'));
+});
+
+document.getElementById('globalEffortSelect').addEventListener('change', (e) => {
+    _saveSetting('/api/settings/effort', { effort: e.target.value }, document.getElementById('effortSaveStatus'));
 });
 
 // ── Initial load ────────────────────────────────────────────

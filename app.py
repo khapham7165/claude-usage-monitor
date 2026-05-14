@@ -1,6 +1,9 @@
 import threading
 import signal
 import os
+import re
+import shutil
+import subprocess
 import sys
 import json
 import logging
@@ -42,11 +45,85 @@ app = Flask(__name__,
 PORT = 5111
 
 _CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
-_AVAILABLE_MODELS = [
-    {"id": "claude-sonnet-4-6", "name": "Sonnet 4.6"},
-    {"id": "claude-opus-4-6", "name": "Opus 4.6"},
-    {"id": "claude-haiku-4-5-20251001", "name": "Haiku 4.5"},
+
+# Aliases the Claude CLI accepts in addition to full model IDs. Listing them
+# alongside the observed model IDs lets users pick "always latest" too.
+_MODEL_ALIASES = [
+    {"id": "opus", "name": "Opus (latest)"},
+    {"id": "sonnet", "name": "Sonnet (latest)"},
+    {"id": "haiku", "name": "Haiku (latest)"},
 ]
+
+# Cache for parsed effort levels (parsed once from `claude --help`).
+_effort_cache = None
+
+
+def _parse_efforts_from_cli():
+    """Parse the `--effort <level>` choices straight from the local Claude CLI's
+    help output so the list always matches what this machine's binary accepts."""
+    global _effort_cache
+    if _effort_cache is not None:
+        return _effort_cache
+
+    binary = shutil.which("claude")
+    levels = []
+    if binary:
+        try:
+            out = subprocess.run(
+                [binary, "--help"], capture_output=True, text=True, timeout=5
+            ).stdout
+            m = re.search(r"--effort\s+<level>\s+[^\(]*\(([^)]*)\)", out)
+            if m:
+                levels = [
+                    x.strip().lower()
+                    for x in re.split(r"[,\s]+", m.group(1))
+                    if x.strip() and x.strip().lower() != "level"
+                ]
+        except Exception:
+            pass
+
+    if not levels:
+        levels = ["low", "medium", "high", "xhigh", "max"]
+
+    _effort_cache = [{"id": lvl, "name": lvl.capitalize()} for lvl in levels]
+    return _effort_cache
+
+
+def _available_models():
+    """Build the model list from token logs (machine-observed) plus CLI aliases.
+    De-duplicated; observed models listed first by most-recent use."""
+    seen_ids = set()
+    out = []
+    try:
+        for m in aggregators.available_models():
+            if m["id"] in seen_ids:
+                continue
+            seen_ids.add(m["id"])
+            out.append({"id": m["id"], "name": m["name"]})
+    except Exception:
+        logging.exception("available_models from token logs failed")
+
+    for a in _MODEL_ALIASES:
+        if a["id"] not in seen_ids:
+            out.append(a)
+            seen_ids.add(a["id"])
+    return out
+
+
+def _read_settings():
+    if not _CLAUDE_SETTINGS.exists():
+        return {}
+    try:
+        with open(_CLAUDE_SETTINGS) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _write_settings(settings):
+    _CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    with open(_CLAUDE_SETTINGS, "w") as f:
+        json.dump(settings, f, indent=2)
 
 # Auto-migrate legacy single-account config
 migrate_single_to_accounts()
@@ -332,37 +409,53 @@ def api_session_tasks(session_id):
 # ── Model Settings ──────────────────────────────────────────
 @app.route("/api/settings/model", methods=["GET"])
 def api_get_model():
-    model = "claude-sonnet-4-6"
-    if _CLAUDE_SETTINGS.exists():
-        try:
-            with open(_CLAUDE_SETTINGS) as f:
-                model = json.load(f).get("model", model)
-        except Exception:
-            pass
-    return jsonify({"model": model, "available": _AVAILABLE_MODELS})
+    settings = _read_settings()
+    model = settings.get("model") or None
+    return jsonify({"model": model, "available": _available_models()})
 
 
 @app.route("/api/settings/model", methods=["POST"])
 def api_set_model():
     data = request.get_json()
     model = (data.get("model") or "").strip()
-    valid_ids = {m["id"] for m in _AVAILABLE_MODELS}
-    if not model or model not in valid_ids:
-        return jsonify({"error": "Invalid model"}), 400
+    settings = _read_settings()
 
-    settings = {}
-    if _CLAUDE_SETTINGS.exists():
-        try:
-            with open(_CLAUDE_SETTINGS) as f:
-                settings = json.load(f)
-        except Exception:
-            pass
+    if not model:
+        settings.pop("model", None)
+        _write_settings(settings)
+        return jsonify({"success": True, "model": None})
 
     settings["model"] = model
-    with open(_CLAUDE_SETTINGS, "w") as f:
-        json.dump(settings, f, indent=2)
-
+    _write_settings(settings)
     return jsonify({"success": True, "model": model})
+
+
+# ── Effort Settings ─────────────────────────────────────────
+@app.route("/api/settings/effort", methods=["GET"])
+def api_get_effort():
+    settings = _read_settings()
+    effort = settings.get("effortLevel") or None
+    return jsonify({"effort": effort, "available": _parse_efforts_from_cli()})
+
+
+@app.route("/api/settings/effort", methods=["POST"])
+def api_set_effort():
+    data = request.get_json()
+    effort = (data.get("effort") or "").strip().lower()
+    settings = _read_settings()
+
+    if not effort:
+        settings.pop("effortLevel", None)
+        _write_settings(settings)
+        return jsonify({"success": True, "effort": None})
+
+    valid_ids = {e["id"] for e in _parse_efforts_from_cli()}
+    if effort not in valid_ids:
+        return jsonify({"error": "Invalid effort"}), 400
+
+    settings["effortLevel"] = effort
+    _write_settings(settings)
+    return jsonify({"success": True, "effort": effort})
 
 
 # ── Auth (API key / OAuth) ───────────────────────────────────

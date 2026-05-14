@@ -858,6 +858,41 @@ function _skillHostBadge(skill) {
     return `<span class="source-tag" style="background:rgba(232,164,92,0.18);color:var(--accent3)">${_escapeHTML(label)}</span>`;
 }
 
+// Persisted open/closed state per node, keyed by a stable node id.
+const SKILL_TREE_LS = LS_PREFIX + 'skillsTree';
+function _loadSkillTreeState() {
+    try { return JSON.parse(localStorage.getItem(SKILL_TREE_LS) || '{}'); }
+    catch { return {}; }
+}
+function _saveSkillTreeState(state) {
+    try { localStorage.setItem(SKILL_TREE_LS, JSON.stringify(state)); } catch {}
+}
+
+function _kindOrder(kind) {
+    if (kind === 'user') return 0;
+    if (kind === 'project') return 2;
+    return 1;  // plugin:* in the middle
+}
+
+function _buildSkillTree(items) {
+    // host (local|ssh:srv-x) → kind (user|plugin:X|project) → (project path?) → [skills]
+    const tree = {};
+    for (const s of items) {
+        const host = s._source || 'local';
+        const kind = s.source || 'unknown';
+        if (!tree[host]) tree[host] = {};
+        if (!tree[host][kind]) tree[host][kind] = kind === 'project' ? {} : [];
+        if (kind === 'project') {
+            const proj = s.project || s.scope_root || 'unknown';
+            if (!tree[host][kind][proj]) tree[host][kind][proj] = [];
+            tree[host][kind][proj].push(s);
+        } else {
+            tree[host][kind].push(s);
+        }
+    }
+    return tree;
+}
+
 function renderSkills() {
     const root = document.getElementById('skillsList');
     const q = _skillsFilter.trim().toLowerCase();
@@ -872,58 +907,120 @@ function renderSkills() {
         return;
     }
 
-    // Group by host first (local + each ssh server), then by kind within host.
-    items.sort((a, b) => {
-        const sa = a._source || 'local', sb = b._source || 'local';
-        if (sa !== sb) return sa === 'local' ? -1 : sb === 'local' ? 1 : (sa > sb ? 1 : -1);
-        const order = (s) => s.source === 'user' ? 0 : s.source === 'project' ? 1 : 2;
-        return order(a) - order(b)
-            || (a.source > b.source ? 1 : a.source < b.source ? -1 : 0)
-            || (a.name > b.name ? 1 : -1);
-    });
+    const tree = _buildSkillTree(items);
+    const state = _loadSkillTreeState();
+    // When filtering, force-open every node so matches are visible.
+    const forceOpen = q.length > 0;
 
-    const groups = {};
-    for (const s of items) {
-        const host = s._source || 'local';
-        const kind = s.source === 'project' && s.project ? `project:${s.project}` : s.source;
-        const key = `${host}|${kind}`;
-        (groups[key] = groups[key] || []).push(s);
-    }
+    const sortedHosts = Object.keys(tree).sort((a, b) =>
+        a === 'local' ? -1 : b === 'local' ? 1 : a.localeCompare(b));
+
+    const renderSkillNode = (s) => {
+        const isLocal = (s._source || 'local') === 'local';
+        const openBtn = isLocal
+            ? `<button class="btn btn-sm btn-ghost" data-skill-open="${_escapeHTML(s.path)}">Open in editor</button>`
+            : '';
+        const desc = s.description
+            ? _escapeHTML(s.description)
+            : '<span class="usc-dim">No description</span>';
+        return `<div class="skill-row">
+            <div class="skill-row-main">
+                <div class="skill-row-name">${_escapeHTML(s.name)} ${_skillSourceBadge(s.source)}</div>
+                <div class="skill-row-desc">${desc}</div>
+                <div class="skill-row-path">${_escapeHTML(s.path)}</div>
+            </div>
+            <div class="skill-row-actions">
+                <button class="btn btn-sm btn-ghost" data-skill-view="${_escapeHTML(s.path)}" data-skill-name="${_escapeHTML(s.name)}" data-skill-source="${_escapeHTML(s._source || 'local')}">View</button>
+                ${openBtn}
+            </div>
+        </div>`;
+    };
+
+    const openAttr = (nodeId, defaultOpen = true) => {
+        if (forceOpen) return ' open';
+        const v = state[nodeId];
+        if (v === undefined) return defaultOpen ? ' open' : '';
+        return v ? ' open' : '';
+    };
 
     let html = '';
-    for (const [key, group] of Object.entries(groups)) {
-        const [host, kind] = key.split('|');
-        let kindHeading;
-        if (kind === 'user') kindHeading = 'User';
-        else if (kind.startsWith('project:')) kindHeading = `Project — ${_escapeHTML(kind.slice(8))}`;
-        else kindHeading = kind.startsWith('plugin:') ? `Plugin — ${_escapeHTML(kind.slice(7))}` : _escapeHTML(kind);
+    for (const host of sortedHosts) {
+        const kinds = tree[host];
+        const hostId = `host|${host}`;
         const hostLabel = host === 'local' ? 'Local' : sourceLabel(host);
-        const heading = `${_escapeHTML(hostLabel)} · ${kindHeading}`;
-
-        html += `<div class="skills-group"><h3 class="skills-group-title">${heading} <span class="badge">${group.length}</span></h3>`;
-        for (const s of group) {
-            const isLocal = (s._source || 'local') === 'local';
-            const openBtn = isLocal
-                ? `<button class="btn btn-sm btn-ghost" data-skill-open="${_escapeHTML(s.path)}">Open in editor</button>`
-                : '';
-            const descText = s.description
-                ? _escapeHTML(s.description)
-                : '<span class="usc-dim">No description</span>';
-            html += `<div class="skill-row">
-                <div class="skill-row-main">
-                    <div class="skill-row-name">${_escapeHTML(s.name)} ${_skillHostBadge(s)} ${_skillSourceBadge(s.source)}</div>
-                    <div class="skill-row-desc">${descText}</div>
-                    <div class="skill-row-path">${_escapeHTML(s.path)}</div>
-                </div>
-                <div class="skill-row-actions">
-                    <button class="btn btn-sm btn-ghost" data-skill-view="${_escapeHTML(s.path)}" data-skill-name="${_escapeHTML(s.name)}" data-skill-source="${_escapeHTML(s._source || 'local')}">View</button>
-                    ${openBtn}
-                </div>
-            </div>`;
+        let hostTotal = 0;
+        for (const k of Object.keys(kinds)) {
+            hostTotal += kinds[k] instanceof Array
+                ? kinds[k].length
+                : Object.values(kinds[k]).reduce((n, arr) => n + arr.length, 0);
         }
-        html += '</div>';
+        const hostBadge = host === 'local'
+            ? '<span class="source-tag" style="background:rgba(111,168,92,0.15)">Local</span>'
+            : `<span class="source-tag" style="background:rgba(232,164,92,0.18);color:var(--accent3)">${_escapeHTML(hostLabel)}</span>`;
+
+        html += `<details class="tree-node tree-host" data-node="${_escapeHTML(hostId)}"${openAttr(hostId, true)}>
+            <summary><span class="tree-chevron"></span>${hostBadge}<span class="tree-label">${_escapeHTML(hostLabel)}</span><span class="badge">${hostTotal}</span></summary>
+            <div class="tree-children">`;
+
+        const sortedKinds = Object.keys(kinds).sort((a, b) => _kindOrder(a) - _kindOrder(b) || a.localeCompare(b));
+        for (const kind of sortedKinds) {
+            const kindId = `kind|${host}|${kind}`;
+            let kindLabel;
+            if (kind === 'user') kindLabel = 'User';
+            else if (kind === 'project') kindLabel = 'Project';
+            else if (kind.startsWith('plugin:')) kindLabel = `Plugin — ${kind.slice(7)}`;
+            else kindLabel = kind;
+
+            if (kind === 'project') {
+                const projects = kinds[kind];
+                const projTotal = Object.values(projects).reduce((n, arr) => n + arr.length, 0);
+                html += `<details class="tree-node tree-kind" data-node="${_escapeHTML(kindId)}"${openAttr(kindId, false)}>
+                    <summary><span class="tree-chevron"></span><span class="tree-label">${_escapeHTML(kindLabel)}</span><span class="badge">${projTotal}</span></summary>
+                    <div class="tree-children">`;
+                const sortedProjs = Object.keys(projects).sort();
+                for (const proj of sortedProjs) {
+                    const projId = `proj|${host}|${proj}`;
+                    const skills = projects[proj].slice().sort((a, b) => a.name.localeCompare(b.name));
+                    html += `<details class="tree-node tree-project" data-node="${_escapeHTML(projId)}"${openAttr(projId, false)}>
+                        <summary><span class="tree-chevron"></span><span class="tree-label tree-path">${_escapeHTML(proj)}</span><span class="badge">${skills.length}</span></summary>
+                        <div class="tree-children">${skills.map(renderSkillNode).join('')}</div>
+                    </details>`;
+                }
+                html += `</div></details>`;
+            } else {
+                const skills = kinds[kind].slice().sort((a, b) => a.name.localeCompare(b.name));
+                html += `<details class="tree-node tree-kind" data-node="${_escapeHTML(kindId)}"${openAttr(kindId, kind === 'user')}>
+                    <summary><span class="tree-chevron"></span><span class="tree-label">${_escapeHTML(kindLabel)}</span><span class="badge">${skills.length}</span></summary>
+                    <div class="tree-children">${skills.map(renderSkillNode).join('')}</div>
+                </details>`;
+            }
+        }
+        html += `</div></details>`;
     }
     root.innerHTML = html;
+
+    // Persist open/closed state per node — but only when NOT in filter mode,
+    // since filter mode force-opens everything and would otherwise clobber the
+    // user's saved preferences.
+    if (!forceOpen) {
+        root.querySelectorAll('details[data-node]').forEach(el => {
+            el.addEventListener('toggle', () => {
+                const s = _loadSkillTreeState();
+                s[el.dataset.node] = el.open;
+                _saveSkillTreeState(s);
+            });
+        });
+    }
+}
+
+function _setAllSkillTreeOpen(open) {
+    const root = document.getElementById('skillsList');
+    const state = _loadSkillTreeState();
+    root.querySelectorAll('details[data-node]').forEach(el => {
+        el.open = open;
+        state[el.dataset.node] = open;
+    });
+    _saveSkillTreeState(state);
 }
 
 async function loadSkills() {
@@ -1031,6 +1128,8 @@ document.getElementById('skillsList').addEventListener('click', (e) => {
 });
 
 document.getElementById('refreshSkillsBtn').addEventListener('click', loadSkills);
+document.getElementById('skillsExpandAllBtn').addEventListener('click', () => _setAllSkillTreeOpen(true));
+document.getElementById('skillsCollapseAllBtn').addEventListener('click', () => _setAllSkillTreeOpen(false));
 document.getElementById('skillsFilter').addEventListener('input', (e) => {
     _skillsFilter = e.target.value;
     renderSkills();

@@ -2,8 +2,9 @@ import json
 import subprocess
 import os
 from uuid import uuid4
+from backend.paths import state_dir
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".config.json")
+CONFIG_PATH = str(state_dir() / ".config.json")
 
 
 def _load_config():

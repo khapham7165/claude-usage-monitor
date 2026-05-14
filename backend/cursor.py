@@ -17,10 +17,9 @@ Cursor shape:
 }
 """
 import json
-import os
-from pathlib import Path
+from backend.paths import state_dir
 
-_CACHE_DIR = Path(os.path.dirname(os.path.dirname(__file__))) / ".cache" / "sources"
+_CACHE_DIR = state_dir() / ".cache" / "sources"
 
 
 def _cursor_path(server_id):

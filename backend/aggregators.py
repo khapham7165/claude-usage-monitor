@@ -21,8 +21,10 @@ _remote_data = {}  # {"srv-xxx": {"history": [...], "token_logs": [...], "synced
 _sync_jobs = {}
 _sync_lock = threading.Lock()
 
-# Disk cache directory
-_CACHE_DIR = Path(os.path.dirname(os.path.dirname(__file__))) / ".cache" / "sources"
+# Disk cache directory — anchored at the persistent state dir so a bundle
+# replacement on macOS doesn't wipe synced data.
+from backend.paths import state_dir
+_CACHE_DIR = state_dir() / ".cache" / "sources"
 
 
 def _get_cached(key, loader):

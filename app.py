@@ -27,6 +27,13 @@ def _resource(relative_path):
     """Resolve path whether running as script or PyInstaller bundle."""
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, relative_path)
+
+# Run state migration BEFORE any module reads config/cache. In bundled mode
+# this moves any legacy .config.json / .cache/ from the old in-bundle path
+# into ~/Library/Application Support/ClaudeUsageMonitor/.
+from backend.paths import migrate_legacy_state
+migrate_legacy_state()
+
 from backend import aggregators
 from backend.active_sessions import get_active_sessions
 from backend.auth import get_api_key, get_auth_status, save_manual_key, delete_manual_key

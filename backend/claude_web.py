@@ -115,19 +115,57 @@ def delete_account(account_id):
 
 # ── Claude.ai API calls ─────────────────────────────────────
 
+_PLAN_PATTERNS = [
+    # (capability, rate_limit_tier substring or None, label)
+    ("raven_enterprise", None, "Enterprise"),
+    ("claude_team",      None, "Claude Team"),
+    ("claude_max",       "20x", "Claude Max 20x"),
+    ("claude_max",       "5x",  "Claude Max 5x"),
+    ("claude_max",       None,  "Claude Max"),
+    ("claude_pro",       None, "Claude Pro"),
+    ("api_individual",   None, "API (Individual)"),
+    ("api",              None, "API"),
+    ("chat",             None, "Free"),
+]
+
+
+def _derive_plan(org, membership):
+    """Map an org's capabilities + rate_limit_tier into a human plan label."""
+    if not org:
+        return ""
+    caps = set(org.get("capabilities") or [])
+    rlt = (org.get("rate_limit_tier") or "").lower()
+    seat = (membership.get("seat_tier") or "").lower() if membership else ""
+    if "enterprise" in seat:
+        return "Enterprise"
+    for cap, rlt_match, label in _PLAN_PATTERNS:
+        if cap in caps and (rlt_match is None or rlt_match in rlt):
+            return label
+    return ""
+
+
 def _api_bootstrap(scraper):
     resp = scraper.get("https://claude.ai/api/bootstrap", headers=_headers())
     if resp.status_code != 200:
         return {"error": f"HTTP {resp.status_code}", "status": resp.status_code}
-    data = resp.json()
-    account = data.get("account", {})
-    memberships = account.get("memberships", [])
-    orgs = [
-        {"uuid": m.get("organization", {}).get("uuid"),
-         "name": m.get("organization", {}).get("name"),
-         "role": m.get("role")}
-        for m in memberships
-    ]
+    data = resp.json() or {}
+    account = data.get("account") or {}
+    if not account:
+        return {"error": "Bootstrap returned no account — session key may be invalid or expired"}
+    memberships = account.get("memberships") or []
+    orgs = []
+    for m in memberships:
+        org = m.get("organization") or {}
+        orgs.append({
+            "uuid": org.get("uuid"),
+            "name": org.get("name"),
+            "role": m.get("role"),
+            "plan": _derive_plan(org, m),
+            "capabilities": org.get("capabilities") or [],
+            "rate_limit_tier": org.get("rate_limit_tier"),
+            "billing_type": org.get("billing_type"),
+            "seat_tier": m.get("seat_tier"),
+        })
     result = {
         "account_uuid": account.get("uuid"),
         "email": account.get("email_address"),
@@ -229,6 +267,7 @@ def fetch_full_account_usage(account_id):
         acc["org_id"] = org_id
         acc["account_uuid"] = account_uuid
         save_account(acc)
+        chosen_org = next((o for o in orgs if o["uuid"] == org_id), {})
         spend_limit = _api_spend_limit(scraper, org_id, account_uuid)
         overage_grant = _api_overage_credit_grant(scraper, org_id)
         prepaid = _api_prepaid_credits(scraper, org_id)
@@ -237,14 +276,16 @@ def fetch_full_account_usage(account_id):
 
     # Determine account type and build unified stats
     is_enterprise = bool(spend_limit and spend_limit.get("seat_tier"))
-    extra = (usage or {}).get("extra_usage", {})
-    five_hour = (usage or {}).get("five_hour")
-    seven_day = (usage or {}).get("seven_day")
+    extra = (usage or {}).get("extra_usage") or {}
+    five_hour = (usage or {}).get("five_hour") or {}
+    seven_day = (usage or {}).get("seven_day") or {}
 
     stats = {
         "account_id": account_id,
         "account": bootstrap,
         "org_id": org_id,
+        "org_name": chosen_org.get("name", ""),
+        "plan": chosen_org.get("plan", ""),
         "is_enterprise": is_enterprise,
         "raw_usage": usage,
         "raw_spend_limit": spend_limit,
@@ -254,8 +295,8 @@ def fetch_full_account_usage(account_id):
 
     if is_enterprise:
         # Enterprise: spend limit is the main metric
-        used = spend_limit.get("used_credits", 0)
-        limit = spend_limit.get("monthly_credit_limit", 0)
+        used = spend_limit.get("used_credits") or 0
+        limit = spend_limit.get("monthly_credit_limit") or 0
         stats["tier"] = (spend_limit.get("seat_tier") or "").replace("_", " ")
         stats["monthly_spend_usd"] = used / 100
         stats["monthly_limit_usd"] = limit / 100
@@ -264,16 +305,16 @@ def fetch_full_account_usage(account_id):
         # Personal: extra_usage + prepaid + overage grant
         stats["tier"] = "personal"
         if extra and extra.get("monthly_limit"):
-            stats["monthly_spend_usd"] = extra["used_credits"] / 100
-            stats["monthly_limit_usd"] = extra["monthly_limit"] / 100
-            stats["monthly_pct"] = round(extra.get("utilization", 0), 1)
+            stats["monthly_spend_usd"] = (extra.get("used_credits") or 0) / 100
+            stats["monthly_limit_usd"] = (extra.get("monthly_limit") or 0) / 100
+            stats["monthly_pct"] = round(extra.get("utilization") or 0, 1)
 
         if prepaid:
-            stats["prepaid_balance_usd"] = prepaid.get("amount", 0) / 100
+            stats["prepaid_balance_usd"] = (prepaid.get("amount") or 0) / 100
             stats["prepaid_currency"] = prepaid.get("currency", "USD")
 
         if overage_grant:
-            stats["overage_grant_usd"] = overage_grant.get("amount_minor_units", 0) / 100
+            stats["overage_grant_usd"] = (overage_grant.get("amount_minor_units") or 0) / 100
             stats["overage_granted"] = overage_grant.get("granted", False)
             stats["overage_eligible"] = overage_grant.get("eligible", False)
 

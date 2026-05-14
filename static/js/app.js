@@ -364,6 +364,8 @@ function buildAccountHTML(data, linkedSource, userGivenName) {
     const email = acc.email || '';
     const tier = data.tier || '';
     const tierLabel = tier === 'personal' ? 'Personal' : tier;
+    const planLabel = data.plan || '';
+    const orgName = data.org_name || '';
     const linkedLabel = _sourceLabel(linkedSource);
     let cards = '';
 
@@ -405,11 +407,26 @@ function buildAccountHTML(data, linkedSource, userGivenName) {
         cards += renderStatCard('Overage Credit', `$${data.overage_grant_usd.toFixed(2)}`, null, `<span style="color:${color}">${status}</span>`);
     }
 
+    const metaParts = [];
+    if (email) metaParts.push(email);
+    if (planLabel) metaParts.push(`<span class="tier-badge">${planLabel}</span>`);
+    else if (tierLabel) metaParts.push(`<span class="tier-badge">${tierLabel}</span>`);
+    if (orgName) metaParts.push(`<span class="usc-dim">${orgName}</span>`);
+    if (linkedLabel) metaParts.push(`<span class="source-tag">${linkedLabel}</span>`);
+
     return `<div class="usage-account-header">
         <span class="usage-account-name">${name}</span>
-        <span class="usage-account-meta">${email} — <span class="tier-badge">${tierLabel}</span>${linkedLabel ? ` <span class="source-tag">${linkedLabel}</span>` : ''}</span>
+        <span class="usage-account-meta">${metaParts.join(' — ')}</span>
     </div>
     <div class="usage-stats-row">${cards}</div>`;
+}
+
+function buildAccountErrorHTML(name, errorMsg, linkedSource) {
+    const linkedLabel = _sourceLabel(linkedSource);
+    return `<div class="usage-account-header">
+        <span class="usage-account-name">${name || 'Account'}</span>
+        <span class="usage-account-meta">${errorMsg}${linkedLabel ? ` <span class="source-tag">${linkedLabel}</span>` : ''}</span>
+    </div>`;
 }
 
 function _sourceLabel(src) {
@@ -455,10 +472,15 @@ async function loadAccountUsage() {
         const linkedSrc = acc.linked_source;
         const accName = acc.name;
         fetchJSON(`/api/accounts/${acc.id}/usage`).then(data => {
-            if (data.error) { block.querySelector('.usage-account-meta').textContent = data.error; return; }
+            if (data.error) {
+                block.innerHTML = buildAccountErrorHTML(accName, data.error, linkedSrc);
+                return;
+            }
             _accountCache[acc.id] = data;
             block.innerHTML = buildAccountHTML(data, linkedSrc, accName);
-        }).catch(() => {});
+        }).catch(err => {
+            block.innerHTML = buildAccountErrorHTML(accName, (err && err.message) || 'Failed to load usage', linkedSrc);
+        });
     }
 
     // Remove blocks not in the filtered list
@@ -644,14 +666,20 @@ async function loadAccountsList() {
     for (const acc of accounts) {
         const el = document.createElement('div');
         el.className = 'list-item';
-        const identity = acc.full_name || acc.display_name || acc.name || 'Unnamed';
+        const realName = acc.full_name || acc.display_name || '';
+        const title = acc.name || realName || 'Unnamed';
+        const subRealName = (acc.name && realName && realName !== acc.name) ? realName : '';
         const orgParts = [acc.org_name, acc.org_role].filter(Boolean);
+        const detailParts = [];
+        if (subRealName) detailParts.push(subRealName);
+        if (acc.email) detailParts.push(acc.email);
+        if (orgParts.length) detailParts.push(orgParts.join(' · '));
         const keyBadge = acc.hasKey
             ? `<span class="acc-chip acc-chip--ok" title="${acc.maskedKey}">Key</span>`
             : '<span class="acc-chip acc-chip--dim">No Key</span>';
         el.innerHTML = `<div class="list-item-info">
-                <div class="item-name">${identity}</div>
-                ${acc.email ? `<div class="item-detail">${acc.email}${orgParts.length ? ' · ' + orgParts.join(' · ') : ''}</div>` : orgParts.length ? `<div class="item-detail">${orgParts.join(' · ')}</div>` : ''}
+                <div class="item-name">${title}</div>
+                ${detailParts.length ? `<div class="item-detail">${detailParts.join(' · ')}</div>` : ''}
                 <div class="item-status" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:3px;">
                     ${keyBadge}
                 </div>

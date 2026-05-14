@@ -1,6 +1,7 @@
 """Collect Claude usage data from remote servers via SSH."""
 import os
 import json
+import logging
 from datetime import datetime, timezone
 import paramiko
 from backend.parsers import (
@@ -9,12 +10,19 @@ from backend.parsers import (
 )
 from backend.auth import _load_config, _save_config, generate_id
 
+log = logging.getLogger(__name__)
+
 
 # ── Server config CRUD ───────────────────────────────────────
 
 def list_servers():
     config = _load_config()
-    return config.get("ssh_servers", [])
+    servers = config.get("ssh_servers", [])
+    # Backfill missing sync_categories on read so existing UI never sees a hole.
+    for srv in servers:
+        if "sync_categories" not in srv:
+            srv["sync_categories"] = list(DEFAULT_SYNC_CATEGORIES)
+    return servers
 
 
 def get_server(server_id):
@@ -24,11 +32,24 @@ def get_server(server_id):
     return None
 
 
+SYNC_CATEGORIES = [
+    {"id": "history",  "label": "History",  "desc": "Top-level message history (history.jsonl)"},
+    {"id": "sessions", "label": "Sessions", "desc": "Per-session token logs + plan/task annotations"},
+    {"id": "plans",    "label": "Plans",    "desc": "Plan files under ~/.claude/plans/"},
+    {"id": "skills",   "label": "Skills",   "desc": "User, plugin, and project SKILL.md files"},
+]
+DEFAULT_SYNC_CATEGORIES = [c["id"] for c in SYNC_CATEGORIES]
+
+
 def save_server(server_dict):
     config = _load_config()
     servers = config.setdefault("ssh_servers", [])
     if "id" not in server_dict:
         server_dict["id"] = generate_id("srv")
+    # New servers and any legacy server missing the field default to syncing
+    # everything — same behavior as before this preference existed.
+    if "sync_categories" not in server_dict:
+        server_dict["sync_categories"] = list(DEFAULT_SYNC_CATEGORIES)
     for i, srv in enumerate(servers):
         if srv["id"] == server_dict["id"]:
             servers[i] = server_dict
@@ -119,7 +140,7 @@ def sync_server(server_config, progress_cb=None, cursor=None, sync_types=None):
     if cursor is None:
         cursor = {}
     if sync_types is None:
-        sync_types = {"history", "sessions", "plans"}
+        sync_types = {"history", "sessions", "plans", "skills"}
     else:
         sync_types = set(sync_types)
 
@@ -139,6 +160,8 @@ def sync_server(server_config, progress_cb=None, cursor=None, sync_types=None):
     history, history_is_full = [], False
     token_logs, session_plans, session_tasks = [], [], {}
     plans = []
+    skills = []
+    skills_debug = None
 
     client = None
     try:
@@ -180,7 +203,16 @@ def sync_server(server_config, progress_cb=None, cursor=None, sync_types=None):
             plans, new_plan_cursor = _sync_plans(client, claude_dir, source, plan_cursor)
             _progress("reading_plans_done", f"{len(plans)} plans")
 
-        _progress("done", f"{len(history)} msgs, {len(token_logs)} token logs, {len(plans)} plans")
+        if "skills" in sync_types:
+            try:
+                skills, skills_debug = _sync_skills(client, claude_dir, source, _progress)
+            except Exception as e:
+                log.warning("skills sync exception: %s", e)
+                _progress("reading_skills_failed", str(e))
+                skills = []
+                skills_debug = {"error": str(e)}
+
+        _progress("done", f"{len(history)} msgs, {len(token_logs)} token logs, {len(plans)} plans, {len(skills)} skills")
 
         return {
             "success": True,
@@ -193,6 +225,8 @@ def sync_server(server_config, progress_cb=None, cursor=None, sync_types=None):
             "session_plans": session_plans,
             "session_tasks": session_tasks,
             "plans": plans,
+            "skills": skills,
+            "skills_debug": skills_debug,
             "active_account": active_account,
             "active_model": active_model,
             "synced_at": datetime.now(timezone.utc).isoformat(),
@@ -746,6 +780,312 @@ def write_remote_model(server_config, model):
     finally:
         if client:
             client.close()
+
+
+def probe_skills(server_config):
+    """One-shot diagnostic: connect, run skill discovery, and return what was
+    seen at each stage. Used by the Skills tab when a remote sync returns 0
+    skills so the user can tell whether the remote actually has any."""
+    client = None
+    try:
+        client = _connect(server_config)
+        home = _exec(client, "echo $HOME").strip()
+        claude_dir = f"{home}/.claude"
+        diag = {"home": home, "claude_dir": claude_dir}
+
+        # Probe 1: does ~/.claude/skills exist?
+        diag["user_skills_dir_exists"] = (
+            _exec(client, f"test -d {claude_dir}/skills && echo yes || echo no").strip() == "yes"
+        )
+
+        # Probe 2: installed_plugins.json
+        plugins_json = _exec(client, f"cat {claude_dir}/plugins/installed_plugins.json 2>/dev/null")
+        try:
+            import json as _json
+            plugins_data = _json.loads(plugins_json) if plugins_json.strip() else {}
+        except Exception:
+            plugins_data = {}
+        plugin_paths = []
+        for k, vs in (plugins_data.get("plugins") or {}).items():
+            if vs:
+                p = vs[-1].get("installPath")
+                if p:
+                    plugin_paths.append({"plugin": k, "path": p})
+        diag["installed_plugin_count"] = len(plugin_paths)
+        diag["installed_plugins"] = plugin_paths
+
+        # Probe 3: project cwds
+        cwd_raw = _exec(client, (
+            f"for d in {claude_dir}/projects/*/; do"
+            "   first=$(ls \"$d\"*.jsonl 2>/dev/null | head -1);"
+            "   if [ -n \"$first\" ]; then"
+            "     grep -m1 -o '\"cwd\":\"[^\"]*\"' \"$first\" 2>/dev/null;"
+            "   fi;"
+            " done"
+        ))
+        import re as _re
+        cwds = []
+        for line in cwd_raw.splitlines():
+            m = _re.search(r'"cwd":"([^"]+)"', line)
+            if m:
+                cwds.append(m.group(1))
+        diag["project_cwd_count"] = len(cwds)
+        diag["project_cwds_sample"] = cwds[:10]
+
+        # Probe 4: which candidate roots actually exist remotely?
+        candidates = [(f"{claude_dir}/skills", "user")]
+        for p in plugin_paths:
+            candidates.append((p["path"], f"plugin:{p['plugin'].split('@')[0]}"))
+            candidates.append((p["path"] + "/skills", f"plugin:{p['plugin'].split('@')[0]}"))
+        for cwd in cwds:
+            candidates.append((f"{cwd}/.claude/skills", "project"))
+
+        test_parts = []
+        for i, (r, _label) in enumerate(candidates):
+            safe = r.replace("'", "'\\''")
+            test_parts.append(f"if [ -d '{safe}' ]; then echo '{i}'; fi")
+        test_out = _exec(client, "; ".join(test_parts)) if test_parts else ""
+        existing = []
+        for token in test_out.split():
+            if token.strip().isdigit():
+                idx = int(token)
+                if 0 <= idx < len(candidates):
+                    existing.append({"path": candidates[idx][0], "label": candidates[idx][1]})
+        diag["existing_root_count"] = len(existing)
+        diag["existing_roots"] = existing
+
+        # Probe 5: SKILL.md files under those roots
+        if existing:
+            find_args = " ".join(f"'{r['path']}'".replace(chr(0), "") for r in existing)
+            find_out = _exec(
+                client,
+                f"find {find_args} -maxdepth 3 -name 'SKILL.md' -type f 2>/dev/null",
+            )
+            files = [p for p in find_out.splitlines() if p.strip().endswith("SKILL.md")]
+        else:
+            files = []
+        diag["skill_md_count"] = len(files)
+        diag["skill_md_files_sample"] = files[:20]
+
+        return diag
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        if client:
+            client.close()
+
+
+def _sync_skills(client, claude_dir, source, progress_cb):
+    """Discover and fetch SKILL.md files from the remote machine.
+
+    Mirrors the local discovery in backend/skills.py: user-level (~/.claude/skills/),
+    installed-plugin paths from installed_plugins.json, and project-local
+    .claude/skills/ for each project enumerated from ~/.claude/projects/.
+
+    Returns a list of skill dicts, each pre-parsed (frontmatter extracted, body
+    inlined) so the frontend can serve them without further SSH calls.
+    """
+    import re as _re
+    import json as _json
+    from pathlib import PurePosixPath
+
+    debug = {
+        "claude_dir": claude_dir,
+        "step": "starting",
+        "plugin_root_count": 0,
+        "project_cwd_count": 0,
+        "candidate_count": 0,
+        "existing_root_count": 0,
+        "skill_file_count": 0,
+        "batches": 0,
+        "raw_total_bytes": 0,
+        "files_seen_in_output": 0,
+        "skills_built": 0,
+    }
+    progress_cb("reading_skills", "Discovering skill roots")
+
+    # ── Round trip 1a: installed_plugins.json ──
+    # Use a separate _exec for each phase; combining everything into one
+    # shell pipeline produced empty output on macOS zsh remotes (the for-loop
+    # never emitted its grep matches when preceded by `cat ...; echo ...;`).
+    plugins_json = _exec(
+        client, f"cat {claude_dir}/plugins/installed_plugins.json 2>/dev/null"
+    )
+    plugin_roots = []
+    try:
+        installed = _json.loads(plugins_json) if plugins_json.strip() else {}
+        for plugin_key, versions in (installed.get("plugins") or {}).items():
+            if not versions:
+                continue
+            install_path = versions[-1].get("installPath")
+            if not install_path:
+                continue
+            label = plugin_key.split("@")[0]
+            plugin_roots.append((label, install_path))
+            plugin_roots.append((label, f"{install_path}/skills"))
+    except (_json.JSONDecodeError, ValueError):
+        pass
+    debug["plugin_root_count"] = len(plugin_roots)
+
+    # ── Round trip 1b: project cwds from ~/.claude/projects/*/<first>.jsonl ──
+    cwd_raw = _exec(client, (
+        f"for d in {claude_dir}/projects/*/; do"
+        "   first=$(ls \"$d\"*.jsonl 2>/dev/null | head -1);"
+        "   if [ -n \"$first\" ]; then"
+        "     grep -m1 -o '\"cwd\":\"[^\"]*\"' \"$first\" 2>/dev/null;"
+        "   fi;"
+        " done"
+    ))
+    project_cwds = []
+    for line in cwd_raw.splitlines():
+        m = _re.search(r'"cwd":"([^"]+)"', line)
+        if m:
+            project_cwds.append(m.group(1))
+    project_roots = [f"{cwd}/.claude/skills" for cwd in project_cwds]
+    debug["project_cwd_count"] = len(project_cwds)
+
+    user_root = f"{claude_dir}/skills"
+    candidates = [(user_root, "user", user_root)]
+    for label, root in plugin_roots:
+        candidates.append((root, f"plugin:{label}", root))
+    for cwd, root in zip(project_cwds, project_roots):
+        candidates.append((root, "project", cwd))
+    debug["candidate_count"] = len(candidates)
+
+    # ── Round trip 2: which candidate dirs actually exist on the remote ──
+    test_cmd_parts = [
+        f"if [ -d '{r.replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}' ]; then echo '{i}'; fi"
+        for i, (r, _, _) in enumerate(candidates)
+    ]
+    test_out = _exec(client, "; ".join(test_cmd_parts)) if test_cmd_parts else ""
+    existing_idxs = {int(x) for x in test_out.split() if x.strip().isdigit()}
+    existing = [candidates[i] for i in sorted(existing_idxs)]
+    debug["existing_root_count"] = len(existing)
+    if not existing:
+        debug["step"] = "no_existing_roots"
+        log.warning("skills sync diagnostics: %s", debug)
+        progress_cb("reading_skills_done", "0 skills (no existing roots)")
+        return [], debug
+
+    # ── Round trip 3: find SKILL.md files under existing roots ──
+    # No -maxdepth: project skills can live deeper than 3 levels under a project
+    # root (e.g. .claude/skills/foo-workspace/iteration-N/SKILL.md), so we accept
+    # the slightly wider scan rather than miss them.
+    find_args = " ".join(f"'{r}'".replace(chr(0), "") for r, _, _ in existing)
+    find_out = _exec(
+        client,
+        f"find {find_args} -name 'SKILL.md' -type f 2>/dev/null",
+    )
+    skill_files_raw = [p for p in find_out.splitlines() if p.strip().endswith("SKILL.md")]
+    # `find` walks multiple roots independently, so the same SKILL.md can be
+    # listed twice (e.g. when both install_path and install_path/skills are
+    # passed in). De-duplicate before the round-trip-4 cat.
+    seen = set()
+    skill_files = []
+    for fp in skill_files_raw:
+        if fp not in seen:
+            seen.add(fp)
+            skill_files.append(fp)
+    debug["skill_file_count"] = len(skill_files)
+    debug["skill_files_sample"] = skill_files[:5]
+    if not skill_files:
+        debug["step"] = "find_returned_none"
+        log.warning("skills sync diagnostics: %s", debug)
+        progress_cb("reading_skills_done", "0 skills (find returned none)")
+        return [], debug
+
+    # ── Round trip 4: fetch each SKILL.md via its own `cat` exec ──
+    # One file per _exec call so the existing 30s channel timeout in _exec
+    # acts as a per-file hang guard. SFTP read() had no timeout and hung.
+    raw_chunks = []
+    for i, fpath in enumerate(skill_files):
+        progress_cb(
+            "reading_skills",
+            f"Fetching {i + 1}/{len(skill_files)}: {fpath.rsplit('/', 1)[-1]}",
+        )
+        safe = fpath.replace("'", "'\\''")
+        # Cap each file at 1 MiB on the remote — a SKILL.md should never need
+        # more than a few KB, but a stray symlink / corrupted file should not
+        # be allowed to exhaust local memory.
+        try:
+            body = _exec(client, f"head -c 1048576 '{safe}' 2>/dev/null")
+        except Exception as e:
+            log.warning("skills sync: head failed for %s: %s", fpath, e)
+            body = ""
+        raw_chunks.append(f"<<<FILE:{fpath}>>>\n{body}\n<<<END>>>")
+        debug["raw_total_bytes"] += len(body)
+        debug["batches"] = i + 1  # repurpose as "files fetched so far"
+    raw = "\n".join(raw_chunks)
+
+    # ── Parse the batched output back into skill dicts ──
+    def _resolve_source(fpath):
+        best = None
+        for (root, label, scope_root) in existing:
+            if fpath.startswith(root.rstrip("/") + "/") or fpath == f"{root.rstrip('/')}/SKILL.md":
+                if best is None or len(root) > len(best[0]):
+                    best = (root, label, scope_root)
+        return best or ("", "unknown", "")
+
+    fm_re = _re.compile(r"^---\s*\n(.*?)\n---\s*\n", _re.DOTALL)
+
+    skills = []
+    files_seen = 0
+    current_file = None
+    current_lines = []
+
+    def _flush(file_path, lines):
+        if not file_path:
+            return
+        text = "\n".join(lines)
+        m = fm_re.match(text)
+        fm = {}
+        body = text
+        if m:
+            body = text[m.end():]
+            for fline in m.group(1).splitlines():
+                if ":" not in fline:
+                    continue
+                k, _, v = fline.partition(":")
+                k = k.strip(); v = v.strip()
+                if v.startswith('"') and v.endswith('"') and len(v) >= 2:
+                    v = v[1:-1]
+                fm[k] = v
+        _, label, scope_root = _resolve_source(file_path)
+        folder = str(PurePosixPath(file_path).parent)
+        skill = {
+            "name": fm.get("name") or PurePosixPath(folder).name,
+            "description": fm.get("description") or "",
+            "body": body,
+            "source_kind": label,
+            "path": file_path,
+            "folder": folder,
+            "scope_root": scope_root,
+            "_source": source,
+        }
+        if label == "project":
+            skill["project"] = scope_root
+        skills.append(skill)
+
+    for line in raw.splitlines():
+        if line.startswith("<<<FILE:") and line.endswith(">>>"):
+            _flush(current_file, current_lines)
+            current_file = line[8:-3]
+            current_lines = []
+            files_seen += 1
+        elif line == "<<<END>>>":
+            _flush(current_file, current_lines)
+            current_file = None
+            current_lines = []
+        elif current_file is not None:
+            current_lines.append(line)
+    _flush(current_file, current_lines)
+
+    debug["files_seen_in_output"] = files_seen
+    debug["skills_built"] = len(skills)
+    debug["step"] = "complete"
+    log.warning("skills sync diagnostics: %s", debug)
+    progress_cb("reading_skills_done", f"{len(skills)} skills")
+    return skills, debug
 
 
 def _parse_remote_plan(file_path, mtime, lines, plans, source):

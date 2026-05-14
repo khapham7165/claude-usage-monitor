@@ -40,6 +40,7 @@
                 <button class="tab-btn active" data-tab="analytics">Analytics</button>
                 <button class="tab-btn" data-tab="sessions">Sessions</button>
                 <button class="tab-btn" data-tab="usage">Account Usage</button>
+                <button class="tab-btn" data-tab="skills">Skills</button>
                 <button class="tab-btn" data-tab="settings">Settings</button>
             </div>
 
@@ -153,6 +154,18 @@
                 <div id="usageAccountsList"></div>
             </div>
 
+            <!-- TAB: Skills -->
+            <div id="tabSkills" class="tab-content hidden">
+                <div class="usage-tab-header">
+                    <h2>Skills</h2>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <input type="text" id="skillsFilter" class="text-input" placeholder="Filter by name or description" style="min-width:260px;">
+                        <button class="btn btn-sm btn-ghost" id="refreshSkillsBtn">Refresh</button>
+                    </div>
+                </div>
+                <div id="skillsList"></div>
+            </div>
+
             <!-- TAB: Settings -->
             <div id="tabSettings" class="tab-content hidden" style="max-width: 700px;">
 
@@ -221,6 +234,18 @@
                 <div class="plan-prompts-label">Allowed prompts</div>
                 <ul id="planModalPromptsList"></ul>
             </div>
+        </div>
+    </div>
+
+    <!-- Skill detail modal -->
+    <div id="skillModal" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="skillModalTitle"></h3>
+                <button class="modal-close" id="skillModalClose">&times;</button>
+            </div>
+            <div class="modal-meta" id="skillModalMeta"></div>
+            <pre class="plan-content" id="skillModalContent"></pre>
         </div>
     </div>
 

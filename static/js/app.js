@@ -57,7 +57,7 @@ function apiUrl(path) {
 function applyTab(tab) {
     currentTab = tab;
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-    ['tabAnalytics', 'tabSessions', 'tabUsage', 'tabSettings'].forEach(id => {
+    ['tabAnalytics', 'tabSessions', 'tabUsage', 'tabSkills', 'tabSettings'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.classList.toggle('hidden', id !== 'tab' + tab.charAt(0).toUpperCase() + tab.slice(1));
     });
@@ -68,6 +68,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         applyTab(btn.dataset.tab);
         savePrefs();
         if (btn.dataset.tab === 'settings') loadSettingsData();
+        else if (btn.dataset.tab === 'skills') loadSkills();
         else loadActiveTab();
     });
 });
@@ -339,6 +340,7 @@ async function loadActiveTab() {
     if (currentTab === 'analytics') await loadAnalytics();
     else if (currentTab === 'sessions') await loadSessionsTab();
     else if (currentTab === 'usage') await loadAccountUsage();
+    else if (currentTab === 'skills') await loadSkills();
     // settings tab is excluded from auto-refresh — it reloads only on user actions
 }
 
@@ -491,7 +493,7 @@ async function loadAccountUsage() {
 
 // ── Background Sync ─────────────────────────────────────────
 let syncPollInterval = null;
-const STEP_LABELS = { starting: 'Starting...', connecting: 'Connecting via SSH', discovering: 'Locating ~/.claude/', reading_history: 'Reading history', reading_history_done: 'History loaded', reading_projects: 'Scanning project logs', reading_plans: 'Reading plans', reading_plans_done: 'Plans loaded', done: 'Finished' };
+const STEP_LABELS = { starting: 'Starting...', connecting: 'Connecting via SSH', discovering: 'Locating ~/.claude/', reading_history: 'Reading history', reading_history_done: 'History loaded', reading_projects: 'Scanning project logs', reading_plans: 'Reading plans', reading_plans_done: 'Plans loaded', reading_skills: 'Reading skills', reading_skills_done: 'Skills loaded', reading_skills_failed: 'Skills sync failed', done: 'Finished' };
 
 function startSyncPolling() {
     if (syncPollInterval) return;
@@ -568,11 +570,21 @@ async function loadSettingsData() {
 }
 
 // ── SSH Servers List ────────────────────────────────────────
+let _syncCategoriesMeta = null;
+
+async function _getSyncCategories() {
+    if (_syncCategoriesMeta) return _syncCategoriesMeta;
+    _syncCategoriesMeta = await fetchJSON('/api/sources/sync-categories');
+    return _syncCategoriesMeta;
+}
+
 async function loadServersList() {
-    const [servers, syncJobs] = await Promise.all([
+    const [servers, syncJobs, catsMeta] = await Promise.all([
         fetchJSON('/api/sources'),
         fetchJSON('/api/sources/sync-status'),
+        _getSyncCategories(),
     ]);
+    const categories = catsMeta.categories || [];
     const container = document.getElementById('serversList');
     container.innerHTML = '';
 
@@ -589,42 +601,80 @@ async function loadServersList() {
             statusHtml = `<span style="color:var(--text-muted)">Not synced</span>`;
         }
 
+        const enabled = new Set(srv.sync_categories || categories.map(c => c.id));
+        const checkboxes = categories.map(c => `
+            <label class="sync-cat" title="${_escapeHTML(c.desc)}">
+                <input type="checkbox" data-sync-cat="${srv.id}" data-cat-id="${c.id}" ${enabled.has(c.id) ? 'checked' : ''}>
+                <span>${_escapeHTML(c.label)}</span>
+            </label>`).join('');
+
         const el = document.createElement('div');
-        el.className = 'list-item';
-        el.innerHTML = `<div class="list-item-info">
-                <div class="item-name">${srv.name || srv.host}</div>
-                <div class="item-detail">${srv.user}@${srv.host}</div>
-                <div class="item-status">${statusHtml}</div>
+        el.className = 'server-card';
+        el.innerHTML = `
+            <div class="server-card-row">
+                <div class="server-card-info">
+                    <div class="item-name">${_escapeHTML(srv.name || srv.host)}</div>
+                    <div class="item-detail">${_escapeHTML(srv.user)}@${_escapeHTML(srv.host)}</div>
+                    <div class="item-status">${statusHtml}</div>
+                </div>
+                <div class="server-card-actions">
+                    <button class="btn btn-sm btn-primary" data-sync-srv="${srv.id}">Sync</button>
+                    <button class="btn btn-sm btn-ghost" data-test-srv="${srv.id}">Test</button>
+                    <button class="btn btn-sm btn-danger" data-remove-srv="${srv.id}">Remove</button>
+                </div>
             </div>
-            <div class="list-item-actions">
-                <button class="btn btn-sm btn-ghost" data-sync-srv="${srv.id}" data-sync-type="">Sync All</button>
-                <button class="btn btn-sm btn-ghost" data-sync-srv="${srv.id}" data-sync-type="history">History</button>
-                <button class="btn btn-sm btn-ghost" data-sync-srv="${srv.id}" data-sync-type="sessions">Sessions</button>
-                <button class="btn btn-sm btn-ghost" data-sync-srv="${srv.id}" data-sync-type="plans">Plans</button>
-                <button class="btn btn-sm btn-ghost" data-test-srv="${srv.id}">Test</button>
-                <button class="btn btn-sm btn-danger" data-remove-srv="${srv.id}">Remove</button>
+            <div class="server-card-cats">
+                <span class="sync-cat-label">Sync:</span>
+                ${checkboxes}
+                <span class="sync-cat-status" data-cat-status="${srv.id}"></span>
             </div>`;
         container.appendChild(el);
     }
 
-    // Bind actions
+    // Sync button — uses the server's saved sync_categories.
     container.querySelectorAll('[data-sync-srv]').forEach(btn => {
         btn.addEventListener('click', async () => {
             const id = btn.dataset.syncSrv;
-            const syncType = btn.dataset.syncType;
             btn.disabled = true; btn.textContent = 'Starting...';
-            const body = syncType ? { types: [syncType] } : {};
             const res = await fetch(`/api/sources/${id}/sync`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
             });
             const data = await res.json();
             if (data.status === 'started' || data.status === 'already_syncing') {
                 btn.textContent = 'Syncing...'; startSyncPolling();
             } else {
-                btn.textContent = 'Failed';
-                setTimeout(() => { btn.textContent = syncType || 'Sync All'; btn.disabled = false; }, 2000);
+                btn.textContent = data.error || 'Failed';
+                setTimeout(() => { btn.textContent = 'Sync'; btn.disabled = false; }, 2500);
             }
+        });
+    });
+
+    // Category checkboxes — debounced auto-save per server.
+    const saveTimers = {};
+    container.querySelectorAll('[data-sync-cat]').forEach(cb => {
+        cb.addEventListener('change', () => {
+            const id = cb.dataset.syncCat;
+            const statusEl = container.querySelector(`[data-cat-status="${id}"]`);
+            statusEl.textContent = 'Saving…';
+            statusEl.style.color = 'var(--text-muted)';
+            clearTimeout(saveTimers[id]);
+            saveTimers[id] = setTimeout(async () => {
+                const selected = Array.from(container.querySelectorAll(`[data-sync-cat="${id}"]:checked`))
+                    .map(x => x.dataset.catId);
+                const res = await fetch(`/api/sources/${id}`, {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sync_categories: selected }),
+                });
+                const data = await res.json();
+                if (data.success) {
+                    statusEl.textContent = 'Saved';
+                    statusEl.style.color = 'var(--accent2)';
+                } else {
+                    statusEl.textContent = data.error || 'Error';
+                    statusEl.style.color = 'var(--danger)';
+                }
+                setTimeout(() => { statusEl.textContent = ''; }, 1500);
+            }, 250);
         });
     });
 
@@ -782,7 +832,215 @@ document.getElementById('globalEffortSelect').addEventListener('change', (e) => 
     _saveSetting('/api/settings/effort', { effort: e.target.value }, document.getElementById('effortSaveStatus'));
 });
 
+// ── Skills ──────────────────────────────────────────────────
+let _allSkills = [];
+let _skillsFilter = '';
+
+function _escapeHTML(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function _skillSourceBadge(source) {
+    if (source === 'user') return '<span class="source-tag" style="background:var(--accent2);color:white">User</span>';
+    if (source === 'project') return '<span class="source-tag" style="background:var(--accent3);color:white">Project</span>';
+    if (source && source.startsWith('plugin:')) {
+        return `<span class="source-tag">Plugin: ${_escapeHTML(source.slice(7))}</span>`;
+    }
+    return `<span class="source-tag">${_escapeHTML(source)}</span>`;
+}
+
+function _skillHostBadge(skill) {
+    const src = skill._source || 'local';
+    if (src === 'local') return '<span class="source-tag" style="background:rgba(111,168,92,0.15)">Local</span>';
+    const label = sourceLabel(src);
+    return `<span class="source-tag" style="background:rgba(232,164,92,0.18);color:var(--accent3)">${_escapeHTML(label)}</span>`;
+}
+
+function renderSkills() {
+    const root = document.getElementById('skillsList');
+    const q = _skillsFilter.trim().toLowerCase();
+    const items = q
+        ? _allSkills.filter(s =>
+            (s.name || '').toLowerCase().includes(q) ||
+            (s.description || '').toLowerCase().includes(q))
+        : _allSkills;
+
+    if (!items.length) {
+        root.innerHTML = `<div class="empty-state">${_allSkills.length ? 'No skills match the filter.' : 'No skills found on this machine.'}</div>`;
+        return;
+    }
+
+    // Group by host first (local + each ssh server), then by kind within host.
+    items.sort((a, b) => {
+        const sa = a._source || 'local', sb = b._source || 'local';
+        if (sa !== sb) return sa === 'local' ? -1 : sb === 'local' ? 1 : (sa > sb ? 1 : -1);
+        const order = (s) => s.source === 'user' ? 0 : s.source === 'project' ? 1 : 2;
+        return order(a) - order(b)
+            || (a.source > b.source ? 1 : a.source < b.source ? -1 : 0)
+            || (a.name > b.name ? 1 : -1);
+    });
+
+    const groups = {};
+    for (const s of items) {
+        const host = s._source || 'local';
+        const kind = s.source === 'project' && s.project ? `project:${s.project}` : s.source;
+        const key = `${host}|${kind}`;
+        (groups[key] = groups[key] || []).push(s);
+    }
+
+    let html = '';
+    for (const [key, group] of Object.entries(groups)) {
+        const [host, kind] = key.split('|');
+        let kindHeading;
+        if (kind === 'user') kindHeading = 'User';
+        else if (kind.startsWith('project:')) kindHeading = `Project — ${_escapeHTML(kind.slice(8))}`;
+        else kindHeading = kind.startsWith('plugin:') ? `Plugin — ${_escapeHTML(kind.slice(7))}` : _escapeHTML(kind);
+        const hostLabel = host === 'local' ? 'Local' : sourceLabel(host);
+        const heading = `${_escapeHTML(hostLabel)} · ${kindHeading}`;
+
+        html += `<div class="skills-group"><h3 class="skills-group-title">${heading} <span class="badge">${group.length}</span></h3>`;
+        for (const s of group) {
+            const isLocal = (s._source || 'local') === 'local';
+            const openBtn = isLocal
+                ? `<button class="btn btn-sm btn-ghost" data-skill-open="${_escapeHTML(s.path)}">Open in editor</button>`
+                : '';
+            const descText = s.description
+                ? _escapeHTML(s.description)
+                : '<span class="usc-dim">No description</span>';
+            html += `<div class="skill-row">
+                <div class="skill-row-main">
+                    <div class="skill-row-name">${_escapeHTML(s.name)} ${_skillHostBadge(s)} ${_skillSourceBadge(s.source)}</div>
+                    <div class="skill-row-desc">${descText}</div>
+                    <div class="skill-row-path">${_escapeHTML(s.path)}</div>
+                </div>
+                <div class="skill-row-actions">
+                    <button class="btn btn-sm btn-ghost" data-skill-view="${_escapeHTML(s.path)}" data-skill-name="${_escapeHTML(s.name)}" data-skill-source="${_escapeHTML(s._source || 'local')}">View</button>
+                    ${openBtn}
+                </div>
+            </div>`;
+        }
+        html += '</div>';
+    }
+    root.innerHTML = html;
+}
+
+async function loadSkills() {
+    const root = document.getElementById('skillsList');
+    root.innerHTML = '<div class="empty-state">Loading...</div>';
+    try {
+        // Honor the global source filter — backend list_skills(source=...) does the right thing.
+        const data = await fetchJSON(apiUrl('/api/skills'));
+        _allSkills = data.skills || [];
+        renderSkills();
+
+        // If we're filtered to an SSH server and got nothing back, offer a probe.
+        if (currentSource && currentSource.startsWith('ssh:') && _allSkills.length === 0) {
+            const id = currentSource.slice(4);
+            root.innerHTML = `<div class="empty-state">
+                <p>No skills cached for this server.</p>
+                <p style="font-size:0.8rem;">Either the remote machine has no SKILL.md files in the expected locations, or sync hasn't run for this category yet.</p>
+                <button class="btn btn-sm btn-primary" id="probeSkillsBtn" style="margin-top:8px;">Diagnose remote</button>
+                <div id="probeSkillsBox" style="display:none; margin-top:12px;">
+                    <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+                        <button class="btn btn-sm btn-ghost" id="probeCopyBtn">Copy</button>
+                        <span id="probeCopyStatus" class="usc-dim" style="font-size:0.75rem;"></span>
+                    </div>
+                    <textarea id="probeSkillsOut" readonly spellcheck="false"
+                        style="width:100%; max-height:55vh; min-height:240px; font-family:ui-monospace,SFMono-Regular,monospace; font-size:0.78rem; padding:10px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; resize:vertical; user-select:text; -webkit-user-select:text;"></textarea>
+                </div>
+            </div>`;
+            document.getElementById('probeSkillsBtn').addEventListener('click', async () => {
+                const box = document.getElementById('probeSkillsBox');
+                const out = document.getElementById('probeSkillsOut');
+                box.style.display = 'block';
+                out.value = 'Probing remote...';
+                try {
+                    const r = await fetch(`/api/sources/${id}/skills/probe`);
+                    const d = await r.json();
+                    out.value = JSON.stringify(d, null, 2);
+                } catch (e) {
+                    out.value = `Error: ${e}`;
+                }
+            });
+            document.getElementById('probeCopyBtn').addEventListener('click', async () => {
+                const out = document.getElementById('probeSkillsOut');
+                const status = document.getElementById('probeCopyStatus');
+                try {
+                    if (navigator.clipboard && window.isSecureContext) {
+                        await navigator.clipboard.writeText(out.value);
+                    } else {
+                        out.select();
+                        document.execCommand('copy');
+                        out.setSelectionRange(0, 0);
+                    }
+                    status.textContent = 'Copied';
+                    status.style.color = 'var(--accent2)';
+                } catch (e) {
+                    status.textContent = 'Copy failed — select text manually';
+                    status.style.color = 'var(--danger)';
+                }
+                setTimeout(() => { status.textContent = ''; }, 2000);
+            });
+        }
+    } catch (e) {
+        root.innerHTML = `<div class="empty-state">Failed to load skills: ${_escapeHTML(String(e))}</div>`;
+    }
+}
+
+async function viewSkill(path, name, source) {
+    const titleEl = document.getElementById('skillModalTitle');
+    const metaEl = document.getElementById('skillModalMeta');
+    const bodyEl = document.getElementById('skillModalContent');
+    titleEl.textContent = name || 'Skill';
+    metaEl.textContent = path;
+    bodyEl.textContent = 'Loading...';
+    document.getElementById('skillModal').classList.remove('hidden');
+    try {
+        const qs = new URLSearchParams({ path });
+        if (source && source !== 'local') qs.set('source', source);
+        const res = await fetch(`/api/skills/content?${qs.toString()}`);
+        const data = await res.json();
+        if (data.error) { bodyEl.textContent = `Error: ${data.error}`; return; }
+        bodyEl.textContent = data.body || '(empty)';
+    } catch (e) {
+        bodyEl.textContent = `Error: ${e}`;
+    }
+}
+
+async function openSkillInEditor(path) {
+    try {
+        const res = await fetch('/api/skills/open', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+        });
+        const data = await res.json();
+        if (data.error) alert(`Could not open: ${data.error}`);
+    } catch (e) {
+        alert(`Could not open: ${e}`);
+    }
+}
+
+document.getElementById('skillsList').addEventListener('click', (e) => {
+    const viewBtn = e.target.closest('[data-skill-view]');
+    if (viewBtn) { viewSkill(viewBtn.dataset.skillView, viewBtn.dataset.skillName, viewBtn.dataset.skillSource); return; }
+    const openBtn = e.target.closest('[data-skill-open]');
+    if (openBtn) openSkillInEditor(openBtn.dataset.skillOpen);
+});
+
+document.getElementById('refreshSkillsBtn').addEventListener('click', loadSkills);
+document.getElementById('skillsFilter').addEventListener('input', (e) => {
+    _skillsFilter = e.target.value;
+    renderSkills();
+});
+document.getElementById('skillModalClose').addEventListener('click', () => document.getElementById('skillModal').classList.add('hidden'));
+document.getElementById('skillModal').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden'); });
+
 // ── Initial load ────────────────────────────────────────────
 loadPrefs();                       // Restore saved state
 refreshSourceDropdown();           // Populate source dropdown
-if (currentTab === 'settings') loadSettingsData(); else loadActiveTab();
+if (currentTab === 'settings') loadSettingsData();
+else if (currentTab === 'skills') loadSkills();
+else loadActiveTab();

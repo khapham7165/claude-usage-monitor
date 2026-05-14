@@ -56,6 +56,8 @@ def _save_to_disk(server_id, data):
         "session_plans": data.get("session_plans", []),
         "session_tasks": data.get("session_tasks", {}),
         "plans": data.get("plans", []),
+        "skills": data.get("skills", []),
+        "skills_debug": data.get("skills_debug"),
         "active_account": data.get("active_account", {}),
         "active_model": data.get("active_model", ""),
     }
@@ -63,10 +65,28 @@ def _save_to_disk(server_id, data):
         json.dump(clean, f)
 
 
+# Hard cap on cache file size. A healthy ~year of sessions/plans/skills sits
+# well under 200 MB; anything bigger is almost certainly a runaway sync (a
+# stray non-text file ingested via _sync_skills, etc.) and parsing it would
+# trigger gigabyte-scale memory growth at startup.
+_MAX_CACHE_FILE_BYTES = 200 * 1024 * 1024
+
+
 def _load_from_disk(server_id):
     """Load cached remote data from disk. Returns None if not found."""
     path = _disk_path(server_id)
     if not path.exists():
+        return None
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    if size > _MAX_CACHE_FILE_BYTES:
+        import logging as _logging
+        _logging.warning(
+            "Skipping oversized cache file %s (%.1f MB) — delete it and re-sync.",
+            path, size / (1024 * 1024),
+        )
         return None
     try:
         with open(path) as f:
@@ -147,6 +167,11 @@ def _merge_remote_data(existing, new_data):
     for p in new_data.get("plans", []):
         plans_by_slug[p["slug"]] = p
 
+    # Skills — full replace if new sync returned any, else keep existing.
+    # Skills sync is non-cursored and cheap; new_data is authoritative when
+    # present.
+    skills = new_data.get("skills") if new_data.get("skills") is not None else existing.get("skills", [])
+
     return {
         "synced_at": new_data.get("synced_at") or existing.get("synced_at"),
         "history": merged_history,
@@ -154,6 +179,7 @@ def _merge_remote_data(existing, new_data):
         "session_plans": merged_session_plans,
         "session_tasks": merged_session_tasks,
         "plans": list(plans_by_slug.values()),
+        "skills": skills,
         "active_account": new_data.get("active_account") or existing.get("active_account", {}),
         "active_model": new_data.get("active_model") or existing.get("active_model", ""),
     }
@@ -215,6 +241,8 @@ def start_background_sync(server_id, server_config, sync_types=None):
                         "session_plans": result.get("session_plans", []),
                         "session_tasks": result.get("session_tasks", {}),
                         "plans": result.get("plans", []),
+                        "skills": result.get("skills", []),
+                        "skills_debug": result.get("skills_debug"),
                         "active_account": result.get("active_account", {}),
                         "active_model": result.get("active_model", ""),
                         "synced_at": result["synced_at"],
@@ -230,6 +258,9 @@ def start_background_sync(server_id, server_config, sync_types=None):
                         data["session_tasks"] = existing.get("session_tasks", {})
                     if "plans" not in synced:
                         data["plans"] = existing.get("plans", [])
+                    if "skills" not in synced:
+                        data["skills"] = existing.get("skills", [])
+                        data["skills_debug"] = existing.get("skills_debug")
 
                     store_remote_data(server_id, data, merge=do_merge)
                     save_cursor(server_id, result["new_cursor"])
@@ -707,6 +738,22 @@ def sessions_list(source=None):
         })
     result.sort(key=lambda x: x["startTime"] or "", reverse=True)
     return result
+
+
+def remote_skills():
+    """Return all cached remote skills, each tagged with its server source.
+
+    Each entry is the skill dict produced by ssh_collector._sync_skills with
+    `_source` set to ssh:<server_id>. The local skills tab merges this with
+    locally-discovered skills.
+    """
+    out = []
+    for server_id, data in _remote_data.items():
+        for s in data.get("skills", []):
+            entry = dict(s)
+            entry["_source"] = f"ssh:{server_id}"
+            out.append(entry)
+    return out
 
 
 def plans_list():

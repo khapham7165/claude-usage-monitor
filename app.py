@@ -37,7 +37,9 @@ from backend.claude_web import (
 from backend.ssh_collector import (
     list_servers, get_server, save_server, delete_server,
     test_connection, sync_server,
+    SYNC_CATEGORIES, DEFAULT_SYNC_CATEGORIES, probe_skills,
 )
+from backend import skills as skills_mod
 
 app = Flask(__name__,
             template_folder=_resource("templates"),
@@ -355,6 +357,27 @@ def api_create_source():
     return jsonify({"success": True, "server": srv})
 
 
+@app.route("/api/sources/sync-categories", methods=["GET"])
+def api_sync_categories():
+    """List the available sync categories (id + label + description)."""
+    return jsonify({"categories": SYNC_CATEGORIES, "default": DEFAULT_SYNC_CATEGORIES})
+
+
+@app.route("/api/sources/<server_id>", methods=["PATCH"])
+def api_update_source(server_id):
+    """Update editable server fields. Currently only sync_categories."""
+    srv = get_server(server_id)
+    if not srv:
+        return jsonify({"error": "Server not found"}), 404
+    body = request.get_json(silent=True) or {}
+    if "sync_categories" in body:
+        valid = {c["id"] for c in SYNC_CATEGORIES}
+        cats = [c for c in (body.get("sync_categories") or []) if c in valid]
+        srv["sync_categories"] = cats
+    save_server(srv)
+    return jsonify({"success": True, "server": srv})
+
+
 @app.route("/api/sources/<server_id>", methods=["DELETE"])
 def api_delete_source(server_id):
     delete_server(server_id)
@@ -374,18 +397,26 @@ def api_test_source(server_id):
 @app.route("/api/sources/<server_id>/sync", methods=["POST"])
 def api_sync_source(server_id):
     """Start a background sync for a server.
-    Optional body: {"types": ["history"]} to sync only specific data types.
-    Valid types: "history", "sessions", "plans". Omit for all three.
+
+    Body is optional. If body["types"] is provided it overrides the server's
+    saved preferences for this one run (used by per-category quick-sync). If
+    omitted, the server's saved `sync_categories` are used.
     """
     body = request.get_json(silent=True) or {}
-    sync_types = body.get("types") or None  # None → all
     srv = get_server(server_id)
     if not srv:
         return jsonify({"error": "Server not found"}), 404
+
+    sync_types = body.get("types")
+    if not sync_types:
+        sync_types = srv.get("sync_categories") or DEFAULT_SYNC_CATEGORIES
+    if not sync_types:
+        return jsonify({"error": "No sync categories selected for this server"}), 400
+
     started = aggregators.start_background_sync(server_id, srv, sync_types=sync_types)
     if not started:
         return jsonify({"status": "already_syncing"})
-    return jsonify({"status": "started"})
+    return jsonify({"status": "started", "types": sync_types})
 
 
 @app.route("/api/sources/sync-status")
@@ -455,6 +486,57 @@ def api_set_effort():
     settings["effortLevel"] = effort
     _write_settings(settings)
     return jsonify({"success": True, "effort": effort})
+
+
+# ── Skills ──────────────────────────────────────────────────
+@app.route("/api/sources/<server_id>/skills/last-sync-debug")
+def api_last_skills_debug(server_id):
+    """Return the diagnostic dict captured by the most recent skills sync for
+    this server (persisted in the on-disk cache)."""
+    data = aggregators._remote_data.get(server_id) or {}
+    return jsonify({"debug": data.get("skills_debug")})
+
+
+@app.route("/api/sources/<server_id>/skills/probe")
+def api_probe_skills(server_id):
+    """Diagnose why a remote skills sync is finding nothing. Returns counts at
+    each discovery stage so the user can tell what the remote actually has."""
+    srv = get_server(server_id)
+    if not srv:
+        return jsonify({"error": "Server not found"}), 404
+    return jsonify(probe_skills(srv))
+
+
+@app.route("/api/skills")
+def api_skills_list():
+    return jsonify({"skills": skills_mod.list_skills(source=_source())})
+
+
+@app.route("/api/skills/content")
+def api_skills_content():
+    path = request.args.get("path", "")
+    source = request.args.get("source", "")
+    if not path:
+        return jsonify({"error": "path required"}), 400
+    result = skills_mod.read_skill_content(path, source=source or None)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/skills/open", methods=["POST"])
+def api_skills_open():
+    data = request.get_json() or {}
+    path = (data.get("path") or "").strip()
+    if not path:
+        return jsonify({"error": "path required"}), 400
+    # Open-in-editor only makes sense for local files.
+    if (data.get("source") or "local") != "local":
+        return jsonify({"error": "Open-in-editor is only supported for local skills"}), 400
+    result = skills_mod.open_in_editor(path)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
 
 
 # ── Auth (API key / OAuth) ───────────────────────────────────

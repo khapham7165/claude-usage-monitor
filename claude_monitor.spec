@@ -72,7 +72,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='Claude Usage Monitor.app',
-    icon=None,
+    icon='static/images/logo.icns',
     bundle_identifier='com.khapham.claude-usage-monitor',
     info_plist={
         'NSHighResolutionCapable': True,

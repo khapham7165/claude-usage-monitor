@@ -42,7 +42,6 @@ from backend.ssh_collector import (
 app = Flask(__name__,
             template_folder=_resource("templates"),
             static_folder=_resource("static"))
-PORT = 5111
 
 _CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
 
@@ -545,19 +544,20 @@ def _extract_rate_limits(headers):
     }
 
 
-def _start_flask():
-    app.run(host="127.0.0.1", port=PORT, debug=False, use_reloader=False)
-
-
 if __name__ == "__main__":
     import webview
+    from werkzeug.serving import make_server
 
-    t = threading.Thread(target=_start_flask, daemon=True)
-    t.start()
+    # Bind to an OS-assigned ephemeral port so dev and bundled builds never collide.
+    server = make_server("127.0.0.1", 0, app, threaded=True)
+    port = server.server_port
+    logging.info("Flask listening on http://127.0.0.1:%d", port)
+
+    threading.Thread(target=server.serve_forever, daemon=True).start()
 
     window = webview.create_window(
         "Claude Usage Monitor",
-        f"http://localhost:{PORT}",
+        f"http://localhost:{port}",
         width=1280,
         height=820,
         min_size=(900, 600),

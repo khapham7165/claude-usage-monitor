@@ -29,6 +29,8 @@ body {
     background: var(--bg);
     color: var(--text);
     min-height: 100vh;
+    display: flex;
+    flex-direction: column;
 }
 
 /* ── Header ──────────────────────────────────────────────── */
@@ -177,7 +179,9 @@ header {
 .app-layout {
     max-width: 1400px;
     margin: 0 auto;
-    min-height: calc(100vh - 60px);
+    width: 100%;
+    flex: 1;
+    min-height: 0;
 }
 
 /* ── Main content ────────────────────────────────────────── */
@@ -403,6 +407,9 @@ main {
 .model-table th, .model-table td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--border); }
 .model-table th { color: var(--text-muted); font-weight: 500; font-size: 0.72rem; text-transform: uppercase; }
 .model-table td { font-variant-numeric: tabular-nums; }
+/* Right-align numeric cells so columns of digits line up. */
+.model-table td.num-cell, .model-table th.num-cell { text-align: right; }
+.model-table tr th:nth-child(n+2), .model-table tr td.num-cell { text-align: right; }
 
 .table-container { overflow-x: auto; }
 
@@ -571,7 +578,39 @@ footer {
 .usage-stat-card .usc-sub { font-size: 0.68rem; color: var(--text-muted); margin-top: 3px; }
 
 .usage-bar { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
-.usage-bar-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--accent2), var(--accent)); transition: width 0.5s ease; }
+.usage-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--accent2), var(--accent));
+    transition: width 0.5s ease;
+    position: relative;
+    overflow: hidden;
+}
+/* Sliding shine overlay — only on "active" bars (below the 80% warning). */
+.usage-bar-fill.bar-active::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 255, 255, 0) 35%,
+        rgba(255, 255, 255, 0.28) 50%,
+        rgba(255, 255, 255, 0) 65%,
+        rgba(255, 255, 255, 0) 100%
+    );
+    transform: translateX(-100%);
+    animation: usage-bar-shine 2.4s ease-in-out infinite;
+    pointer-events: none;
+}
+@keyframes usage-bar-shine {
+    0%   { transform: translateX(-100%); }
+    60%  { transform: translateX(100%); }
+    100% { transform: translateX(100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .usage-bar-fill.bar-active::after { animation: none; opacity: 0; }
+}
 
 /* ── Skeleton loading ────────────────────────────────────── */
 .skeleton .skel-line {

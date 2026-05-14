@@ -351,6 +351,12 @@ function barColor(pct) {
     return parseFloat(pct) > 80 ? 'linear-gradient(90deg, var(--accent3), var(--danger))' : 'linear-gradient(90deg, var(--accent2), var(--accent))';
 }
 
+// "Active" bars (below the 80% warning) get a moving shine; near-limit bars
+// stay static so the visual attention shifts from healthy → alarming.
+function barFillClass(pct) {
+    return parseFloat(pct) > 80 ? 'usage-bar-fill' : 'usage-bar-fill bar-active';
+}
+
 function renderStatCard(label, value, bar, sub) {
     return `<div class="usage-stat-card">
         <div class="usc-label">${label}</div>
@@ -384,7 +390,7 @@ function buildAccountHTML(data, linkedSource, userGivenName) {
             }
         }
         cards += renderStatCard('5-Hour Rate', `${p}%`,
-            `<div class="usage-bar"><div class="usage-bar-fill" style="width:${Math.min(100,p)}%;background:${barColor(p)}"></div></div>`,
+            `<div class="usage-bar"><div class="${barFillClass(p)}" style="width:${Math.min(100,p)}%;background:${barColor(p)}"></div></div>`,
             p > 0 ? `Resets ${resetLabel5h}` : 'No usage');
     }
     if (data.rate_7d_pct !== undefined) {
@@ -392,13 +398,13 @@ function buildAccountHTML(data, linkedSource, userGivenName) {
         let resetLabel = '--';
         if (data.rate_7d_reset) { const d = new Date(data.rate_7d_reset); resetLabel = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }); }
         cards += renderStatCard('7-Day Rate', `${p}%`,
-            `<div class="usage-bar"><div class="usage-bar-fill" style="width:${Math.min(100,p)}%;background:${barColor(p)}"></div></div>`,
+            `<div class="usage-bar"><div class="${barFillClass(p)}" style="width:${Math.min(100,p)}%;background:${barColor(p)}"></div></div>`,
             `Resets ${resetLabel}`);
     }
     if (data.monthly_limit_usd) {
         const u = data.monthly_spend_usd || 0, l = data.monthly_limit_usd, p = data.monthly_pct || 0;
         cards += renderStatCard('Extra Usage', `$${u.toFixed(2)} <span class="usc-dim">/ $${l.toFixed(2)}</span>`,
-            `<div class="usage-bar"><div class="usage-bar-fill" style="width:${Math.min(100,p)}%;background:${barColor(p)}"></div></div>`,
+            `<div class="usage-bar"><div class="${barFillClass(p)}" style="width:${Math.min(100,p)}%;background:${barColor(p)}"></div></div>`,
             `${p}% — $${(l-u).toFixed(2)} remaining`);
     }
     if (data.prepaid_balance_usd !== undefined)

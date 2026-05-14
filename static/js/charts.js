@@ -355,10 +355,10 @@ function renderModelTable(containerId, data) {
     for (const d of data) {
         html += `<tr>
             <td>${d.displayName}</td>
-            <td>${formatTokens(d.inputTokens)}</td>
-            <td>${formatTokens(d.outputTokens)}</td>
-            <td>${formatTokens(d.cacheReadTokens)}</td>
-            <td>${formatCost(d.estimatedCostUSD)}</td>
+            <td class="num-cell">${formatTokensFull(d.inputTokens)}</td>
+            <td class="num-cell">${formatTokensFull(d.outputTokens)}</td>
+            <td class="num-cell">${formatTokensFull(d.cacheReadTokens)}</td>
+            <td class="num-cell">${formatCostFull(d.estimatedCostUSD)}</td>
         </tr>`;
     }
     html += '</tbody></table>';

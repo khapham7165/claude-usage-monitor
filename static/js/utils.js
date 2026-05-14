@@ -1,17 +1,68 @@
+// ── Numeric formatting ─────────────────────────────────────
+// Two flavors per type: compact (cards/tooltips/badges) and full (tables).
+//   formatNumber(1234567)  → "1.23M"      formatNumberFull(1234567)  → "1,234,567"
+//   formatCost(1234.56)    → "$1.23K"     formatCostFull(1234.56)    → "$1,234.56"
+//   formatCost(0.0042)     → "$0.0042"    formatCostFull(0.0042)     → "$0.0042"
+
+// toFixed but trim trailing zeros: (1.20, 2) → "1.2", (1.00, 2) → "1".
+function _trim(n, decimals) {
+    return parseFloat(n.toFixed(decimals)).toString();
+}
+
 function formatNumber(n) {
-    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-    if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
-    return n.toString();
+    if (n == null || Number.isNaN(n)) return '—';
+    const abs = Math.abs(n);
+    const sign = n < 0 ? '-' : '';
+    if (abs >= 1e9) return sign + _trim(abs / 1e9, 2) + 'B';
+    if (abs >= 1e6) return sign + _trim(abs / 1e6, 2) + 'M';
+    if (abs >= 1e3) return sign + _trim(abs / 1e3, 1) + 'K';
+    if (Number.isInteger(n)) return n.toLocaleString('en-US');
+    return _trim(n, 2);
+}
+
+function formatNumberFull(n) {
+    if (n == null || Number.isNaN(n)) return '—';
+    return Number.isInteger(n)
+        ? n.toLocaleString('en-US')
+        : n.toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
 function formatTokens(n) {
     return formatNumber(n);
 }
 
+function formatTokensFull(n) {
+    return formatNumberFull(n);
+}
+
 function formatCost(n) {
-    if (n >= 1) return '$' + n.toFixed(2);
-    if (n >= 0.01) return '$' + n.toFixed(2);
-    return '$' + n.toFixed(4);
+    if (n == null || Number.isNaN(n)) return '—';
+    const abs = Math.abs(n);
+    const sign = n < 0 ? '-' : '';
+    if (abs === 0) return '$0';
+    if (abs >= 1e6) return sign + '$' + _trim(abs / 1e6, 2) + 'M';
+    if (abs >= 1e4) return sign + '$' + _trim(abs / 1e3, 1) + 'K';
+    if (abs >= 1) {
+        return sign + '$' + abs.toLocaleString('en-US', {
+            minimumFractionDigits: 2, maximumFractionDigits: 2,
+        });
+    }
+    if (abs >= 0.01) return sign + '$' + abs.toFixed(2);
+    // Sub-cent: 4 sig digits, trim trailing zeros so 0.005 → "$0.005" not "$0.0050".
+    return sign + '$' + _trim(abs, 4);
+}
+
+function formatCostFull(n) {
+    if (n == null || Number.isNaN(n)) return '—';
+    const abs = Math.abs(n);
+    const sign = n < 0 ? '-' : '';
+    if (abs === 0) return '$0.00';
+    if (abs >= 0.01) {
+        return sign + '$' + abs.toLocaleString('en-US', {
+            minimumFractionDigits: 2, maximumFractionDigits: 2,
+        });
+    }
+    return sign + '$' + _trim(abs, 4);
 }
 
 function formatDuration(ms) {

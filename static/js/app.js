@@ -806,6 +806,11 @@ document.getElementById('addServerBtn').addEventListener('click', async () => {
 
 document.getElementById('refreshUsageBtn').addEventListener('click', loadAccountUsage);
 
+// Auto-reload Account Usage every 60s while that tab is active and the page is visible.
+setInterval(() => {
+    if (currentTab === 'usage' && !document.hidden) loadAccountUsage();
+}, 60000);
+
 async function _saveSetting(url, body, statusEl) {
     statusEl.textContent = 'Saving...';
     statusEl.style.color = 'var(--text-muted)';
